@@ -1,0 +1,305 @@
+---
+title: "Ordination"
+author: "Harald Brolin"
+date: "9 april 2018"
+output: html_document
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r library, message=FALSE, warning=FALSE}
+library("phyloseq"); packageVersion("phyloseq")
+library("ggplot2"); packageVersion("ggplot2")
+library("tidyverse")
+library("gridExtra")
+library("knitr")
+library("Hmisc")
+library("metagenomeSeq")
+library("EnvStats")
+```
+
+
+
+```{r load}
+df <- readRDS(file = "../phyloseq_v2.rds")
+set.seed(2018)
+df@sam_data$sequence_depth <- apply(df@otu_table, 2, function(x) (sum(x))) # Ad sequencing depth for each sample
+```
+
+#### Normalization
+
+Inspiration on normalization can be found here: [link](https://www.researchgate.net/publication/314194282_Normalization_and_microbial_differential_abundance_strategies_depend_upon_data_characteristics)
+
+##### Rarefying
+In short rarefying more clearly clusters samples according to biological origin than other normalziation methods. Rarefying does not increase the FDR in itself but does reduce the sensitivity since a part of the data is removed. For "groups" (hard to tell if the meaning of groups refers to ex. sample sites or sequencing run) with a large difference (~10x) in average library size rarefying lowers the FDR. 
+
+##### CSS
+Link to article: [link](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4010126/)
+
+"...Only the segment of each sample’s count distribution that is relatively invariant across samples is scaled by CSS. This attempts to mitigate the influence of larger count values in the same matrix column."
+
+Basically CSS tries to remove the effect of preferential amplification within each sample, this method has a hard time diminishing the effect of large sample size variation.
+
+Conclusion from this paper: [link](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5123278/)
+
+"..The effect of library size normalization was by far the lowest, especially between no normalization, CSS, DESeq2, and TMM normalization.."
+"When exploring beta diversity of microbiome data, analysts should carefully consider their choice of count transformation and distance metric, the latter having the largest impact on results...""
+
+
+First, let's take a look at the library sizes for samples, groups and sequencing runs.
+
+```{r echo=FALSE}
+
+ kable(df@sam_data %>% 
+         group_by(location) %>% 
+         summarise(
+           min = min(sequence_depth), 
+           max = max(sequence_depth),
+           average_size = mean(sequence_depth)) %>%
+         mutate(size_difference_max_min = max /min),
+         align = "c",
+         digits = 3,
+         caption = "Summary for each site")
+
+ kable(df@sam_data %>% 
+         group_by(run_date) %>% 
+         summarise(
+           min = min(sequence_depth), 
+           max = max(sequence_depth),
+           average_size = mean(sequence_depth)) %>%
+         mutate(size_difference_max_min = max /min),
+         align = "c",
+         digits = 3,
+         caption = "Summary for each run date")
+```
+
+#### Conclusion:
+Looking at the different "groups" the difference between the average library size is not that large, although witin each group we have differences larger than 10x.
+
+Looking at the different sequencing runs we do see a difference in average library size, though not as large as 10x (298591/47099). The difference within each group is not as larger here, but compairing samples from different sequeing runs will include batch effects. And since we have no control samples it's hard to evaluate and/or remove the batch effect.
+
+#### Important to note:
+To evaluate the cluster separation from a beta-diversity analysis the adonis-function in the vegan-package can be used. Link to example article (same as above): [link](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5123278/)
+
+### Beta-diversity
+
+The phyloseq tutorial recommends to remove low-occurence, porly represented OTUs. In our case we have ASVs, I do not know how this affects the filtering. It is important to think about the method of count-transformation, sample depth normalization and distance (diversity) measurment, it is also important to decide upon which filtering should be used. Singletons could be removed, note that and ASV singleton and an OTU singleton are quite different, if we want to use Unifrac measurments it might be smart to remove unclassified or long / short reads (like those existing the Sjöbo case study) dependent on how theese affect the distance measurment (since they are calssifed as NA likley that the distance is not inflated). 
+
+From previous papers (the ones attached in the project description as inspiration) they remove samples below 5,000 reads, remove singeltons (OTUs), use CSS and weighted UniFrac ("sperstorm sandy").
+
+
+
+##### First beta analysis, no ASVs removed and rarefied, using Bray-Curtis, Unifrac-U, Unifrac-W.
+```{r transform and create new df based on different distances, message=FALSE, include=FALSE}
+# Rarefy to Overby131205 the sample with the lowest sequence depth
+# rarefy without replacement as per the R.Knight article
+df <- rarefy_even_depth(df,
+                        df@sam_data$sequence_depth %>% min,
+                        rngseed = 2018,
+                        replace = FALSE,
+                        trimOTUs = TRUE,
+                        verbose = TRUE)
+
+bray_pcoa <- ordinate(df, "PCoA", "bray")
+u_unifrac <- ordinate(df, "PCoA", "uunifrac")
+w_unifrac <- ordinate(df, "PCoA", "wunifrac")
+# bray_pcoa <- readRDS("beta_div_data/bray_pcoa.rds")
+# u_unifrac <- readRDS("beta_div_data/u_unifrac.rds")
+# w_unifrac <- readRDS("beta_div_data/w_unifrac.rds")
+
+```
+
+```{r plot scree, message=FALSE, warning=FALSE}
+
+my_plot_scree <- function(ordinate_obj, type){
+  df_plot <- cbind(ordinate_obj$vectors %>% colnames() %>% .[1:9], 
+                   ordinate_obj$values$Relative_eig[1:9]) %>% 
+                  as.data.frame()
+  df_plot$V2 <- df_plot$V2 %>% as.character() %>% as.numeric()
+  df_plot$V1 <- df_plot$V1 %>% as.character()
+  ggplot(df_plot, aes(x = V1, y = V2)) + geom_histogram(stat = "identity") + ggtitle(type) + theme_minimal()
+  
+}
+
+my_plot_scree(bray_pcoa, type = "Scree plot, Bray_curtis" )
+my_plot_scree(u_unifrac, type = "Scree plot, Unweigted UniFrac")
+my_plot_scree(w_unifrac, type = "Scree plot, Weighted UniFrac")
+```
+
+```{r}
+p1 <- plot_ordination(df, bray_pcoa, color = "location", shape = "season") + ggtitle("Bray-Curtis, rarefied data")
+p2 <- plot_ordination(df, u_unifrac, color = "location", shape = "season") + ggtitle("Unweighted-Unifrac, rarefied data")
+p3 <- plot_ordination(df, w_unifrac, color = "location", shape = "season") + ggtitle("Weighted-Unifrac, rarefied data")
+p1;p2;p3
+ggsave(plot = p1, filename = "../../analysis_images/2_bray_rarefy.png")
+ggsave(plot = p2, filename = "../../analysis_images/2_uufrac_rarefy.png")
+ggsave(plot = p3, filename = "../../analysis_images/2_wufrac_rarefy.png")
+```
+#### Conclusion
+Unweighted UniFrac has the highest level of separation for the trea distance measurments, but has the lowest percentage explained variation (sum = ~9%). Investigating further we can se that component 1 explains the difference across seasons, although not perfectly. Component 2 seems to distinguish the samples based on locaton, where minnesgardet and tallvagen clearly differs from the rest. 
+
+Add barplot to the existing plot
+
+```{r}
+# Since the rownames are in the same order
+locations <- df@sam_data$location %>% unique() %>% as.vector() # Get location names
+seasons <- df@sam_data$season %>% unique() %>% as.vector() # Get season names
+
+get_axis <- function(variable, axis, column) {
+  # This function gets rows dependet on vairable (Stockholm etc. or Autumn etc.) and the corresponding Axis
+  # The function returns a dataframe with samplenames, Axis-values and category (either season or location)
+  rows <- which(df@sam_data[, column] == variable)
+  cbind(
+    (u_unifrac$vectors[rows, axis]),  
+    rep(variable, row %>% length)) %>% 
+  as.data.frame() %>% 
+  setNames(., nm = c(axis, column))  #Lägg till mnumeric char
+}
+
+location_df <- # Creates a df with axis 1 and location
+  lapply(locations, get_axis, axis = "Axis.2", column = "location") %>%
+  do.call(rbind, .) # Cbind all dataframes from the lapply
+
+location_df$Axis.2 <- location_df$Axis.2 %>% as.character() %>% as.numeric() # Covert from factor to numeric
+location_df$location <- factor(location_df$location,
+                                   levels = c("Borås", "Härnösand", "Motala", "Östersund", "Stockholm", "Trollhättan"))
+
+season_df <- 
+  lapply(seasons, get_axis, axis = "Axis.1", column = "season") %>%
+  do.call(rbind, .)
+
+season_df$Axis.1 <- season_df$Axis.1 %>% as.character() %>% as.numeric() 
+```
+
+
+
+
+
+```{r}
+
+blankPlot <-  # Create an empty plot
+  ggplot()+geom_blank(aes(1,1)) +
+  theme(plot.background = element_blank(), 
+   panel.grid.major = element_blank(),
+   panel.grid.minor = element_blank(), 
+   panel.border = element_blank(),
+   panel.background = element_blank(),
+   axis.title.x = element_blank(),
+   axis.title.y = element_blank(),
+   axis.text.x = element_blank(), 
+   axis.text.y = element_blank(),
+   axis.ticks = element_blank()
+     )
+
+box_location <- # Create boxplot of location, color by location 
+  ggplot(location_df, aes(y = Axis.2, x = location)) +
+  geom_boxplot(aes(fill = location), show.legend = FALSE) +
+  theme(plot.margin = unit(c(0.15,0,1.1,0.2), "cm"), # Sync the images c(top, right, bottom, left) 
+        axis.text.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        legend.position="none",
+        panel.background=element_blank(),
+        panel.border=element_blank(),
+        panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(),
+        plot.background=element_blank()) 
+
+box_season <- # Create boxpålot of seasons
+  ggplot(season_df, aes(y = Axis.1, x = season)) +
+  geom_boxplot() +
+  coord_flip() +
+  theme(plot.margin = unit(c(0,3.2,0,0.12), "cm"),# Sync the images c(top, right, bottom, left)
+        axis.text.x = element_blank(),
+        axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        legend.position="none",
+        panel.background=element_blank(),
+        panel.border=element_blank(),
+        panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(),
+        plot.background=element_blank())
+
+p2 <- # Create the maion ordination plot
+  plot_ordination(df, u_unifrac, color = "location", shape = "season") +
+  theme(legend.title = element_blank(),
+        legend.key = element_blank())
+
+p3 <- grid.arrange(blankPlot, # Empty plot
+             box_season,
+             box_location,
+             p2,
+             ncol = 2,
+             widths=c(1.2, 6),
+             heights=c(1.2, 6),
+             top = ("Unweighted-UniFrac")); p3
+
+ggsave(plot = p3, filename = "../../analysis_images/2_barplot_uu_ordination_rarefy.png")
+```
+
+
+
+Bray-Curtis and weighted UniFrac does not separate the samples as much, though it seems like bray-curtis does differnetiate tallvagen from the other samples. For weighted UniFrac minnesgardet seems to be differentiating itself. 
+```{r}
+p1 <- plot_ordination(df, bray_pcoa, color = "sequence_depth", shape = "season") + ggtitle("Bray-Curtis, rarefied data") #+ geom_point(aes(size = sequence_depth))
+p2 <- plot_ordination(df, u_unifrac, color = "sequence_depth", shape = "season") + ggtitle("Unweighted-Unifrac, rarefied data") #+ geom_point(aes(size = sequence_depth))
+p3 <- plot_ordination(df, w_unifrac, color = "sequence_depth", shape = "season") + ggtitle("Weighted-Unifrac, rarefied data") #+ geom_point(aes(size = sequence_depth))
+p1;p2;p3
+# ggsave(plot = p2, filename = "../../analysis_images/2_app_uufrac_rarefy_depth.png")
+```
+
+#### Conclusion
+The data does not seem to be exibithing strong clustering based on sequence depth, keep in mind that the coloring has not log10 transformed and thus difference in depth between sample with similar depth can be hard to spot. From a previos mark-down object *ordination_plot.Rmd* we saw that bray-curtis was heavily dependet on sample sequence depth, but with rarefied data this seems not to be the case. The same can be said for the other measurments where the depth seems to be desplayed at random.
+
+```{r fig.show="hold",fig.align="center"}
+p1 <- plot_ordination(df, bray_pcoa, color = "run_date", shape = "season") + ggtitle("Bray-Curtis, rarefied data") + theme_minimal()
+p2 <- plot_ordination(df, u_unifrac, color = "run_date", shape = "season") + ggtitle("Unweighted-Unifrac, rarefied data") #+ geom_point(aes(size = sequence_depth))
+p3 <- plot_ordination(df, w_unifrac, color = "run_date", shape = "season") + ggtitle("Weighted-Unifrac, rarefied data") #+ geom_point(aes(size = sequence_depth))
+p1;p2;p3
+ggsave(plot = p2, filename = "../../analysis_images/2_app_uu_ordination_run_date.png")
+```
+
+#### Conclusion
+Lookin at the ordination plot colored by run_date we can se that for unweighted UniFrac that the samples from 2015 seems to be clustering to the left, inducating a batch effect. This does also co-incide with a large part for spring- and summer-samples.
+
+
+#### Principal components
+Though the unweighted UniFrac distance measurment seemed to separate the samples in the best way (sample site and season) the percent explained variation was relativley low. Looking at both bray-curtis and weighted UniFrac we have a higher percentage (22% resp. 37.7%), it could be the case that other principal-components separates the samples in a better way.
+
+
+```{r}
+ord <- ordinate(df, method = "PCoA", distance = "wunifrac")
+components <- cbind(ord$vectors %>% as.data.frame(), df@sam_data)
+
+ggplot(components, aes(x = Axis.1, y = Axis.2, color = location, shape = season)) + geom_point() + ggtitle("PCoA, Weighted UniFrac, rarefied data")
+ggplot(components, aes(x = Axis.1, y = Axis.3, color = location, shape = season)) + geom_point() + ggtitle("PCoA, Weighted UniFrac, rarefied data")
+ggplot(components, aes(x = Axis.2, y = Axis.3, color = location, shape = season)) + geom_point() + ggtitle("PCoA, Weighted UniFrac, rarefied data")
+```
+
+
+```{r}
+ord <- ordinate(df, method = "PCoA", distance = "bray")
+components <- cbind(ord$vectors %>% as.data.frame(), df@sam_data, estimate_richness(df, split = TRUE, measures = c("Observed", "Chao1", "ACE", "Shannon", "Simpson", "InvSimpson", "Fisher")))
+ggplot(components, aes(x = Axis.1, y = Axis.2, color = location, shape = season)) + geom_point() + ggtitle("PCoA, Bray-Curts, rarefied data")
+ggplot(components, aes(x = Axis.1, y = Axis.3, color = location, shape = season)) + geom_point() + ggtitle("PCoA, Bray-Curts, rarefied data")
+p1 <- ggplot(components, aes(x = Axis.2, y = Axis.3, color = location, shape = season)) + geom_point() + ggtitle("PCoA, Bray-Curts, rarefied data"); p1
+# ggsave(plot = p1, filename = "../../analysis_images/2_app_bray_rarefy_axis_2_3.png")
+```
+
+### Conclusion
+Bray-Curtis seem to separate the sites for Axis.3 and Axis.2, further investigation is needed.
+
+Looking at sequence depth and run date no clear clusters seems to be dependent on either. 
+
+```{r}
+ggplot(components, aes(x = Axis.2, y = Axis.3, color = run_date , shape = season)) + geom_point() + ggtitle("PCoA, Bray-Curts, rarefied data")
+ggplot(components, aes(x = Axis.2, y = Axis.3, color = Chao1, shape = season)) + geom_point() + ggtitle("PCoA, Bray-Curts, rarefied data")
+```
+
