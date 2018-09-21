@@ -1,0 +1,48 @@
+---
+title: "merge_runs_remove_chimera"
+author: "Harald Brolin"
+date: "August 23, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages}
+library(dada2); packageVersion("dada2")
+```
+
+```{r merge reads, eval=TRUE, include=TRUE}
+# Merge multiple runs (if necessary)
+path <- "../links/dada2_rds_data/"
+
+st1 <- readRDS(list.files(path, pattern = "seqtab_no_chim_", full.names = TRUE)[1])
+st2 <- readRDS(list.files(path, pattern = "seqtab_no_chim_", full.names = TRUE)[2])
+st3 <- readRDS(list.files(path, pattern = "seqtab_no_chim_", full.names = TRUE)[3])
+st4 <- readRDS(list.files(path, pattern = "seqtab_no_chim_", full.names = TRUE)[4])
+st5 <- readRDS(list.files(path, pattern = "seqtab_no_chim_", full.names = TRUE)[5])
+st6 <- readRDS(list.files(path, pattern = "seqtab_no_chim_", full.names = TRUE)[6])
+st7 <- readRDS(list.files(path, pattern = "seqtab_no_chim_", full.names = TRUE)[7])
+st8 <- readRDS(list.files(path, pattern = "seqtab_no_chim_", full.names = TRUE)[8])
+
+st.all <- mergeSequenceTables(st1, st2, st3, st4, st5 ,st6 ,st7 ,st8)
+saveRDS(st.all, file = "../links/dada2_rds_data/st_all.rds")
+```
+```{r taxa classifier 50, eval=TRUE, include=TRUE}
+# Classify the reads down to genus, using 50% bootstrap threshold
+set.seed(100)
+tax_50 <- assignTaxonomy(readRDS("../links/dada2_rds_data/st_all.rds"), "../links/taxonomy_files_RDP/rdp_train_set_16.fa.gz", multithread=TRUE, minBoot = 50)
+saveRDS(tax_50, file = "../links/dada2_rds_data/tax_50.rds")
+```
+
+```{r species classifier}
+# Assigns species to ASV, since the RDP database only extends to genus level.
+# The allowMultiple setting allows for several matches for each ASV, result is a concatenated string with all exact matches
+# The addSpecies function is a wrapper for the assignSpecies function, it matches the species to the kingdom (or else remove the species)
+set.seed(100)
+tax_50 <- readRDS("../links/dada2_rds_data/tax_50.rds")
+tax_50_species <- addSpecies(tax_50, "../links/taxonomy_files_RDP/rdp_species_assignment_16.fa.gz", allowMultiple = TRUE)
+saveRDS(tax_50_species, file = "../links/dada2_rds_data/taxa_table_50_species.rds")
+```
+
