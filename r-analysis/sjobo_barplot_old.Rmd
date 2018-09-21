@@ -1,0 +1,85 @@
+---
+title: "Bar plot overby, colored by phylum"
+author: "Harald Brolin"
+date: "8 augusti 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+```
+
+```{r message=FALSE, warning=FALSE}
+library("phyloseq"); packageVersion("phyloseq")
+library("ggplot2"); packageVersion("ggplot2")
+library("tidyverse"); packageVersion("tidyverse")
+library("gridExtra"); packageVersion("gridExtra")
+```
+
+```{r echo=TRUE, message=FALSE}
+df <- readRDS("../../phyloseq.rds")
+for (i in 1:7){df@tax_table[is.na(df@tax_table[,i]), i] <- " Unclassified"}
+```
+
+```{r echo=TRUE, message=FALSE}
+df.old <- df
+df@sam_data$SampleName <-  rownames(df@sam_data) # Add the sample ID as a column
+df <- subset_samples(df, SampleName %in% c("Overby141016",  "Overby141016kl1010",  "Overby141016kl1400",  "Overby141016kl1550", "Overby141023" ,"Overby141028")) # Choose samples of interest
+df <- prune_taxa(taxa_sums(df) != 0, df) # Remove OTU:s not included in theese samples
+df.trans <- transform_sample_counts(df, function(x)  x/sum(x)) # Transform the taxa_table into fraction of abundence (%)
+```
+
+```{r echo=TRUE, message=FALSE, phylum}
+df.level <- tax_glom(df.trans, 'Phylum',NArm=F) # Agglomerate the taxa_table to Phylum level
+Percentage_MRA <- apply(df.level@otu_table, 1, mean) %>% as.data.frame() %>% rownames_to_column %>% as.tibble()
+#Percentage_MRA <- as.tibble(rownames_to_column(as.data.frame(apply(df.level@otu_table, 1, mean)))) # Get the mean realative abundence 
+#rem_otu <- Percentage_MRA %>% filter(. < 0.005)  # Group OTUs below a minimum threshold of relative abundence, set to 0.5 %
+rem_otu <- Percentage_MRA %>% arrange(desc(.)) %>% tail(nrow(.) - 10)
+phylum_top_10 <- df.level@tax_table[which((df.level@otu_table %>% rownames) %in% rem_otu$rowname),"Phylum" ]
+df.level@tax_table[which((df.level@otu_table %>% rownames) %in% rem_otu$rowname),"Phylum" ] <- "\"Other\"" # Name the group of OTU:s
+plot_bar(df.level, fill ="Phylum") # Create the barplot with selected coloring
+```
+
+```{r echo=TRUE, message=FALSE, class}
+tax_level <- "Class" # Choose the taxonomic level of interest 
+df.level <- tax_glom(df.trans, tax_level,NArm=F) # Agglomerate to the selected level
+Percentage_MRA <- apply(df.level@otu_table, 1, mean) %>% as.data.frame() %>% rownames_to_column %>% as.tibble() # Get the mean relative abundence 
+rem_otu <- Percentage_MRA %>% arrange(desc(.)) %>% tail(nrow(.) - 10) #  Get the top 10 most common OTUs or Classes, group the "uncommon" OTUs 
+df.level@tax_table[which(df.level@tax_table[,2] %in% (phylum_top_10 %>% as.data.frame() %>% .[[1]] %>% as.character())), "Phylum"] <- "\"Other\""
+plot_bar(df.level, fill = "Phylum")
+```
+
+
+The same process is repreated for all taxonomic levls, except Species.
+
+```{r order}
+tax_level <- "Order"
+df.level <- tax_glom(df.trans, tax_level,NArm=F)
+Percentage_MRA <- apply(df.level@otu_table, 1, mean) %>% as.data.frame() %>% rownames_to_column %>% as.tibble()
+#rem_otu <- Percentage_MRA %>% filter(. < 0.005)                           # set <-  the limit for grouped reads, in fraction of total
+rem_otu <- Percentage_MRA %>% arrange(desc(.)) %>% tail(nrow(.) - 10)
+df.level@tax_table[which(df.level@tax_table[,2] %in% (phylum_top_10 %>% as.data.frame() %>% .[[1]] %>% as.character())), "Phylum"] <- "\"Other\""
+p1 <- plot_bar(df.level, fill = "Phylum") + scale_x_discrete(labels = c("2014-10-14", "2014-10-16", "2014-10-16", "2014-10-16", "2014-10-21", "2014-10-28")); p1
+ggsave(plot = p1, filename = "../../../analysis_images/6_bar_overby_order.png")
+```
+
+```{r family}
+tax_level <- "Family"
+df.level <- tax_glom(df.trans, tax_level,NArm=F)
+Percentage_MRA <- apply(df.level@otu_table, 1, mean) %>% as.data.frame() %>% rownames_to_column %>% as.tibble()
+#rem_otu <- Percentage_MRA %>% filter(. < 0.005)                           # set <-  the limit for grouped reads, in fraction of total
+rem_otu <- Percentage_MRA %>% arrange(desc(.)) %>% tail(nrow(.) - 10)
+df.level@tax_table[which(df.level@tax_table[,2] %in% (phylum_top_10 %>% as.data.frame() %>% .[[1]] %>% as.character())), "Phylum"] <- "\"Other\""
+plot_bar(df.level, fill = "Phylum")
+```
+
+```{r genus}
+tax_level <- "Genus"
+df.level <- tax_glom(df.trans, tax_level,NArm=F)
+Percentage_MRA <- apply(df.level@otu_table, 1, mean) %>% as.data.frame() %>% rownames_to_column %>% as.tibble()
+#rem_otu <- Percentage_MRA %>% filter(. < 0.005)                           # set <-  the limit for grouped reads, in fraction of total
+rem_otu <- Percentage_MRA %>% arrange(desc(.)) %>% tail(nrow(.) - 10)
+df.level@tax_table[which(df.level@tax_table[,2] %in% (phylum_top_10 %>% as.data.frame() %>% .[[1]] %>% as.character())), "Phylum"] <- "\"Other\""
+plot_bar(df.level, fill = "Phylum")
+```
+
