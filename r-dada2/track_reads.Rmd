@@ -1,0 +1,56 @@
+---
+title: "track_reads_through_pipeline"
+author: "Harald Brolin"
+date: "August 23, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dada2); packageVersion("dada2")
+
+sequencing_runs <- c("140111", "140327",  "140527",  "140910", 
+                     "141028",  "141121", "150123",  "150421")
+
+getN <- function(x) sum(getUniques(x))
+
+for (run in sequencing_runs){
+  files <- sort(list.files("../links/dada2_rds_data/", pattern = run, full.names = TRUE))
+  filtered <- readRDS(files[5])
+  dadaFs <- readRDS(files[1])
+  seqtab <- readRDS(files[6])
+  seqtab_no_chim <- readRDS(files[7])
+  denoised <- sapply(dadaFs, getN)
+  track <- cbind(filtered, denoised, rowSums(seqtab), rowSums(seqtab_no_chim), rowSums(seqtab_no_chim)/(filtered[,1]), rowSums(seqtab_no_chim)/(filtered[,2]))
+  colnames(track) <- c("input", "filtered", "denoised", "tabled", "nonchim", "ratio_whole_pipe", "ratio_filter_to end")
+  print(track)
+  }
+
+# This code is missing the input-reads, filtered-reads, (denoised included), merged, (tabled included), (no chim included)
+```
+
+```{r}
+
+get_read_stats <- 
+  function(run){
+  files <- sort(list.files("../links/dada2_rds_data/", pattern = run, full.names = TRUE))
+  filtered <- readRDS(files[5])
+  dadaFs <- readRDS(files[1])
+  seqtab <- readRDS(files[6])
+  seqtab_no_chim <- readRDS(files[7])
+  denoised <- sapply(dadaFs, getN)
+  track <- cbind(filtered, denoised, rowSums(seqtab), rowSums(seqtab_no_chim), rowSums(seqtab_no_chim)/(filtered[,1]), rowSums(seqtab_no_chim)/(filtered[,2]))
+  colnames(track) <- c("input", "filtered", "denoised", "tabled", "nonchim", "ratio_whole_pipe", "ratio_filter_to end")
+  return(track)
+  }
+
+read_stats_df <- 
+  sapply(sequencing_runs, get_read_stats)
+
+df <- as.data.frame(do.call(rbind,read_stats_df))
+
+```
+
