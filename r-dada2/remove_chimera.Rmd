@@ -1,0 +1,25 @@
+---
+title: "chmiera_runs_dada2"
+author: "Harald Brolin"
+date: "August 23, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(dada2); packageVersion("dada2")
+# Merge multiple runs (if necessary)
+run_paths <- c("../links/140111/140111_filtered/", "../links/141028/141028_filtered/") #  "../links/140327/140327_filtered/", "../links/140527/140527_filtered/", "../links/140910/140910_filtered/",
+             # , "../links/141121/141121_filtered/", "../links/150123/150123_filtered/", "../links/150421/150421_filtered/")
+
+for (run in run_paths){
+  seqtab <- readRDS(list.files(run, pattern = "seqtab", full.names = TRUE))
+  seqtab_no_chim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose = TRUE)
+  saveRDS(seqtab_no_chim, file = paste(run,"seqtab_no_chim_", unlist(strsplit(run, "/"))[3],".rds", sep = "" ))
+}
+
+```
