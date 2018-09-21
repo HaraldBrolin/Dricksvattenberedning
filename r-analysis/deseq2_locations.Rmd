@@ -1,0 +1,307 @@
+---
+title: "Deseq2 locations"
+author: "Harald Brolin"
+date: "September 20, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+```
+
+```{r message=FALSE, warning=FALSE}
+library("phyloseq"); packageVersion("phyloseq")
+library("ggplot2"); packageVersion("ggplot2")
+library("tidyverse")
+library("gridExtra")
+library("knitr")
+library("Hmisc")
+library("metagenomeSeq")
+library("DESeq2")
+```
+
+
+### Deseq2 filtering
+We know that deseq2 has problems finding DE ASVs in sparse dataframes and since the aim of this DE-analysis is to find stable ASVs we can remove ASVs not included in all groups.
+
+First we'll remove duplicate and change the rownames into something more read-able
+```{r remove replicates}
+set.seed(2018)
+df <- readRDS("../r-phyloseq/phyloseq_v2.rds") # Read the phyloseq object
+
+sequences <- df@otu_table %>% rownames() # Store the ASV sequences
+taxa_names(df) <- paste("asv_", (1:(df@otu_table %>% nrow)), sep = "") # Rename the ASVs to number from 1 to 40172
+names(sequences) <- taxa_names(df)
+
+
+# We need to do somethin about the three samples taken close in time 
+# "Overby141016kl1010" "Overby141016kl1400" "Overby141016kl1550"
+# I'll keep the one taken at "Overby141016kl1400" 
+# I will also remove "Sjobo140307kl0900"
+df <- prune_samples(!(rownames(df@sam_data) %in% c("Overby141016kl1010", "Overby141016kl1550")), df)
+df <- prune_samples(!(rownames(df@sam_data) == "Sjobo140307kl0900"), df)
+
+df <- prune_taxa(taxa_sums(df) > 0, df) # Remove ASVs with no count in theese samples
+```
+
+Now we'll test the difference between Härnösand and the grouped locations (see Beta-diversity)
+First we need to remove Östersund and create a new category for grouped vs non-grouped
+
+```{r Härnösand group}
+df_ost <- prune_samples(df@sam_data$location != "Östersund", df) # Keep only samples from overby and minnesgardet
+df_ost <- prune_taxa(taxa_sums(df_ost) > 0, df_ost) # Remove ASVs with no count in theese samples
+
+df_ost@sam_data$group <- NA
+df_ost@sam_data$group[which(df_ost@sam_data$location == "Härnösand")] <- "extreme"
+df_ost@sam_data$group[which(df_ost@sam_data$location != "Härnösand")] <- "group"
+
+# df@sam_data <- df@sam_data %>% rownames_to_column %>% mutate(group = case_when(location == "Härnösand" ~ 0, location != "Härnösand" ~ 1 )) 
+```
+
+Next since we want to check for differential abundent ASVs we need ASVs included in both groups and since we want to control for season we want the ASV to exist in all seasons. metagenomeSeq has one such function, the drawback is that we need to convert the df to metagenomSeq format (this takes time and could be redone using a )
+
+
+```{r Unique function}
+# Count the precense of ASVs given category
+get_unique_based_on_col <- function(phyloseq, var_col) {
+  # Given phyloseq object and column_variable, 
+  # return dataframe with TRUE/FALSE for each ASV orderd by columns based on column_variable levels
+  
+  levels <- get_variable(phyloseq, var_col) %>% unique() # First get the variable levels
+  var_logical_list <- lapply(levels, function(x) get_variable(phyloseq, var_col) == x) # Create a TRUE/FALSE list for pruning the phyloseq object, based on variable level
+  phyloseq_lst <- lapply(var_logical_list, prune_samples, phyloseq) # Create list of differnt phyloseq objects, based on var level filtering
+  
+  # Förlåt Jon riktigt svårtolkat nedan;
+  # För varje phyloseq object, skapa en df med count = TRUE/FALSE beroende på om ASVn finns i minst ett prov (ex ett av Stockholm-proverna)
+  # Inherit rownames from phyloseq, create column name based on vaiable level 
+  
+  asv_var_table <- 
+    do.call(cbind, lapply(phyloseq_lst, 
+                          function(phylo) data.frame(row.names = rownames(phylo@otu_table),
+                                                     count = (apply(phylo@otu_table, 2,
+                                                                    function(x) (x != 0)) %>% rowSums()) > 0)))
+  
+  names(asv_var_table) <- lapply(as.character(levels), paste, "exists", sep = "_")
+  return(asv_var_table)
+}
+
+# To verify function, the sums of the both are corret extreme and group, i have also checked with metSeq all names for group are equal
+# x <- get_unique_based_on_col(df, var_col = "group")
+# df_test <- prune_samples(df@sam_data$location != "Härnösand",df)
+# sum(x$group_exists == ((df_test@otu_table %>% rowSums()) != 0))
+# ((df_test@otu_table %>% rowSums()) != 0) %>% sum
+# sum(x$group_exists)
+
+```
+
+First we choose the variables we are intersted in controling and testing, since we want to control the batch effect we need to include run_date. We want to compair group and thus we need to include it.
+
+```{r Härnö get var}
+var_of_interest <- c("group", "run_date") #, "run_date", "season", "location")
+
+asv_status <-
+  do.call(cbind, lapply(var_of_interest,
+                        function(x) get_unique_based_on_col(df_ost, x)))
+
+common_asvs <- (asv_status %>% rowSums()) == ncol(asv_status) 
+
+df_ost <- prune_taxa(common_asvs, df_ost)
+```
+
+
+### Deseq2 Analysis 
+Looking for differential abundent ASVs
+```{r deseq1 result function}
+
+deseq_2_and_result <- function(phylo, rarefy, betaPrior, alpha, dispersionPlot){
+  if (rarefy == TRUE){ # Rarefy to lowest sample sum
+    phylo <-
+      rarefy_even_depth(phylo,
+                    sample.size = phylo@otu_table %>% colSums() %>% min,
+                    replace = FALSE, trimOTUs = TRUE)
+  }
+  diagdds <- phyloseq_to_deseq2(phylo, ~ run_date + group) # Define the formula and convert data
+  diagdds <- DESeq(diagdds, test="Wald", fitType="parametric", parallel = TRUE , betaPrior = betaPrior) # Run the model in parallel
+  # Notes on betaPrior betaPrior: whether or not to put a zero-mean normal prior on the non-intercept coefficients See nbinomWaldTest for description of the calculation of the beta prior. By default, the beta prior is used only for the Wald test, but can also be specified for the likelihood ratio test
+  
+  if (dispersionPlot == TRUE){
+    plotDispEsts(diagdds)
+  }
+  
+  deseq_result <- results(diagdds, cooksCutoff = FALSE) # Extract the result from deiaggds 
+  result_plot <- 
+    ggplot(as(deseq_result, "data.frame"), aes(x = baseMean, y = log2FoldChange)) +
+    geom_point(aes(color = padj < 0.001)) + scale_x_log10()
+  
+  significant_table <- deseq_result[which(deseq_result$padj < alpha), ] # Filter result table based on alpha
+
+  significant_table <-  # Bind taxonomic information with ASVs
+    cbind(
+    as(significant_table, "data.frame"),
+    as(tax_table(phylo)[rownames(significant_table), ], "matrix"))
+  
+  return(list(significant_table, result_plot)) # Return the final table but also the DESeq outpt, since it is needed for a plot
+}
+
+
+```
+
+
+```{r Härnö deseq2 and plot}
+deseq_1 <- deseq_2_and_result(df_ost, rarefy = TRUE, betaPrior = TRUE, alpha = 0.001, dispersionPlot = TRUE)
+deseq_2 <- deseq_2_and_result(df_ost, rarefy = FALSE, betaPrior = TRUE, alpha = 0.001, dispersionPlot = FALSE)
+
+
+deseq_1[[2]] # Scatter plot of significant ASVs
+
+df_plot <- deseq_1[[1]] %>% rownames_to_column() # To generate a ggplot df
+
+ggplot(df_plot %>% arrange(Phylum, log2FoldChange),
+       aes(x = factor(rowname, levels = rowname), y = log2FoldChange)) +
+  geom_col(aes(fill = Phylum)) +
+  coord_flip() + 
+  guides(fill = guide_legend(reverse = TRUE)) + 
+  theme(axis.title.y = element_blank())
+          
+ggplot(df_plot %>% arrange(log2FoldChange),
+       aes(x = factor(rowname, levels = rowname), y = log2FoldChange)) +
+  geom_col(aes(fill = Phylum)) +
+  coord_flip() + 
+  theme(axis.title.y = element_blank())        
+```
+
+
+
+
+---------------------------------
+
+
+
+
+
+
+```{r härnö scatter}
+asv_scatter_plot <- 
+  data.frame(row.names = df@otu_table %>% rownames(), # asvs
+             nr_samples = apply(df@otu_table, 2, function(x) (x != 0)) %>% rowSums()) # Count number of sites in which the OTU occurs in
+
+re_abundence <- apply(df@otu_table, 2, function(x) (x / sum(x) )) %>% as.data.frame() # Calulate fraction of reads for all samples
+
+asv_scatter_plot$re_abundence <- apply(re_abundence, 1, function(x) (mean(x))) # mean of fraction
+
+asv_scatter_plot$in_model <- 
+  case_when((asv_scatter_plot %>% rownames()) %in% (df_ost@otu_table %>% rownames()) == FALSE ~ "Not in model",
+            (asv_scatter_plot %>% rownames()) %in% (df_ost@otu_table %>% rownames()) == TRUE ~ "Not significant")
+
+asv_scatter_plot$in_model[(asv_scatter_plot %>% rownames()) %in% (deseq_1[[2]] %>% rownames())] <- 
+  "Significant"
+
+ggplot(asv_scatter_plot, aes(y = re_abundence, x = nr_samples)) + geom_point(aes(color = in_model)) + scale_y_log10()
+```
+
+Plot the dispersions and the relasionship between significant ASVs and baseMean.
+
+Now we'll test the difference between Östersund and the grouped locations (see Beta-diversity)
+First we need to remove Östersund and create a new category for grouped vs non-grouped
+
+```{r Östersund group}
+df_harno <- prune_samples(df@sam_data$location != "Härnösand", df) # Keep only samples from overby and minnesgardet
+df_harno <- prune_taxa(taxa_sums(df_harno) > 0, df_harno) # Remove ASVs with no count in theese samples
+
+df_harno@sam_data$group <- NA
+df_harno@sam_data$group[which(df_harno@sam_data$location == "Östersund")] <- "extreme"
+df_harno@sam_data$group[which(df_harno@sam_data$location != "Östersund")] <- "group"
+
+# df@sam_data <- df@sam_data %>% rownames_to_column %>% mutate(group = case_when(location == "Härnösand" ~ 0, location != "Härnösand" ~ 1 )) 
+```
+
+
+```{r östersund col var}
+var_of_interest <- c("group", "run_date") #, "run_date", "season", "location")
+
+asv_status <-
+  do.call(cbind, lapply(var_of_interest,
+                        function(x) get_unique_based_on_col(df_harno, x)))
+
+common_asvs <- (asv_status %>% rowSums()) == ncol(asv_status) # 454 common ASvs
+
+df_harno <- prune_taxa(common_asvs, df_harno)
+```
+
+```{r Östersund result and plot}
+deseq_3 <- deseq_2_and_result(df_harno, rarefy = TRUE, betaPrior = TRUE, alpha = 0.001, dispersionPlot = TRUE)
+deseq_4 <- deseq_2_and_result(df_harno, rarefy = FALSE, betaPrior = TRUE, alpha = 0.001, dispersionPlot = FALSE)
+
+
+deseq_3[[2]] # Scatter plot of significant ASVs
+
+df_plot <- deseq_3[[1]] %>% rownames_to_column() # To generate a ggplot df
+
+ggplot(df_plot %>% arrange(Phylum, log2FoldChange),
+       aes(x = factor(rowname, levels = rowname), y = log2FoldChange)) +
+  geom_col(aes(fill = Phylum)) +
+  coord_flip() + 
+  guides(fill = guide_legend(reverse = TRUE)) + 
+  theme(axis.title.y = element_blank())
+          
+ggplot(df_plot %>% arrange(log2FoldChange),
+       aes(x = factor(rowname, levels = rowname), y = log2FoldChange)) +
+  geom_col(aes(fill = Phylum)) +
+  coord_flip() + 
+  theme(axis.title.y = element_blank())   
+
+deseq_4[[2]] # Scatter plot of significant ASVs
+
+df_plot <- deseq_4[[1]] %>% rownames_to_column() # To generate a ggplot df
+
+ggplot(df_plot %>% arrange(Phylum, log2FoldChange),
+       aes(x = factor(rowname, levels = rowname), y = log2FoldChange)) +
+  geom_col(aes(fill = Phylum)) +
+  coord_flip() + 
+  guides(fill = guide_legend(reverse = TRUE)) + 
+  theme(axis.title.y = element_blank())
+          
+ggplot(df_plot %>% arrange(log2FoldChange),
+       aes(x = factor(rowname, levels = rowname), y = log2FoldChange)) +
+  geom_col(aes(fill = Phylum)) +
+  coord_flip() + 
+  theme(axis.title.y = element_blank()) 
+```
+
+
+```{r östersund scatter}
+asv_scatter_plot <- 
+  data.frame(row.names = df@otu_table %>% rownames(), # asvs
+             nr_samples = apply(df@otu_table, 2, function(x) (x != 0)) %>% rowSums()) # Count number of sites in which the OTU occurs in
+
+re_abundence <- apply(df@otu_table, 2, function(x) (x / sum(x) )) %>% as.data.frame() # Calulate fraction of reads for all samples
+
+asv_scatter_plot$re_abundence <- apply(re_abundence, 1, function(x) (mean(x))) # mean of fraction
+
+asv_scatter_plot$in_model <- 
+  case_when((asv_scatter_plot %>% rownames()) %in% (df_ost@otu_table %>% rownames()) == FALSE ~ "Not in model",
+            (asv_scatter_plot %>% rownames()) %in% (df_ost@otu_table %>% rownames()) == TRUE ~ "Not significant")
+
+asv_scatter_plot$in_model[(asv_scatter_plot %>% rownames()) %in% (deseq_3[[2]] %>% rownames())] <- 
+  "Significant"
+
+ggplot(asv_scatter_plot, aes(y = re_abundence, x = nr_samples)) + geom_point(aes(color = in_model)) + scale_y_log10()
+```
+
+
+```{r comparison Östersund Härnösand}
+df_ost
+deseq_1[[1]] %>% nrow
+deseq_2[[1]] %>% nrow
+
+df_harno
+deseq_3[[1]] %>% nrow
+deseq_4[[1]] %>% nrow
+
+capture.output(deseq_1[[1]] %>% rownames() %>% as.data.frame() %>% print.data.frame(., quote = FALSE, row.names = FALSE), file = "ostersund_signf_asv.txt")
+capture.output(deseq_3[[1]] %>% rownames() %>% as.data.frame() %>% print.data.frame(., quote = FALSE, row.names = FALSE), file = "harnosand_signf_asv.txt")
+
+```
+
+#### Conclusion:
+Rarefying seems to increase the number of significant ASVs, this is agains my presumptiom since rarefying should reduce FDR. 
