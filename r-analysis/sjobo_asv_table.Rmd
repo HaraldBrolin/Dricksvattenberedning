@@ -1,0 +1,197 @@
+---
+title: "Sjobo table"
+author: "Harald Brolin"
+date: "8 augusti 2018"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+```{r cars}
+library("phyloseq")
+library("ggplot2")
+library("tidyverse")
+library("gridExtra")
+library("knitr")
+
+df <- readRDS("../../phyloseq.rds") # Load phyloseq-object
+```
+
+# Sample select and phyloseq-data agglomeration 
+# (Finns risk att OTU:er som bara finns i ett prov kommer med, troligtvis inte på mean men ev på differnce och variance)
+
+
+
+```{r pressure, echo=TRUE}
+sequences <- df@otu_table %>% rownames()
+taxa_names(df) <- 1:(df@otu_table %>% nrow)
+  
+samples <- c("Sjobo140306", "Sjobo140307kl0900", "Sjobo140307kl1200",
+             "Sjobo140318","Sjobo140404")
+
+df@sam_data$SampleName <- rownames(df@sam_data) # Add the sample ID as a column
+df <- subset_samples(df, SampleName %in% samples) # Choose samples of interest
+df <- prune_taxa(taxa_sums(df) > 4, df) # Remove OTU:s not included in theese samples
+df_trans <- transform_sample_counts(df, function(x)  x/sum(x) * 100 ) # Transform the taxa_table into percent of total reads (%)
+
+df_trans <- tax_glom(df_trans, 'Phylum',NArm=F)
+```
+
+The **mean** of the downpour samples.
+
+The **variance** between the downpour samples and the "normal" samples.
+
+The **difference** between the downpour samples and the sample taken befor the downpour.
+
+```{r echo=TRUE}
+# Convert the otu_table to a tibble
+df <- df_trans@otu_table %>% 
+      as.data.frame() %>% 
+      rownames_to_column() %>% 
+      as.tibble()
+
+downpour_samples <- c("Sjobo140307kl0900", "Sjobo140307kl1200")
+
+# Create column of percent means for the downpour samples
+df$mean_downpour_samples <- df %>% 
+                            select(downpour_samples) %>% rowMeans()
+
+# Get the mean for an OTU, using the mean for the downpour sampes
+df$mean <- df %>% 
+           select(Sjobo140306, mean_downpour_samples, Sjobo140318, Sjobo140404) %>%
+           rowMeans()
+
+# Get the variance in percentage, using mean for the downpour samples 
+df$variance <- df %>%
+               select(Sjobo140306, mean_downpour_samples, Sjobo140318, Sjobo140404) %>% 
+               apply(., 1, var)
+
+# Get the difference in percentage betweeen befor the downpour and the mean of the downpour samples
+diff_before <- df %>% 
+               mutate(difference = mean_downpour_samples - Sjobo140306) %>%
+               select(difference)
+
+# To associate the taxonomic information with the df
+df <- cbind(df, diff_before) %>% as.data.frame %>% as.tibble()
+
+# To add the taxonomic classifications
+df <- cbind(df,
+            df_trans@tax_table[,1:2] %>% 
+            as.data.frame() %>% 
+            as.tibble()) %>% as.tibble()
+
+names(df)[1] <- "asv_id"
+
+```
+
+
+
+
+## Table over the main Phylum, here ordered by greatest **difference** in percentage (%) (before and after)
+
+```{r}
+# A negative value indicated a decrease in abundence while a positive value indicates an increase
+diff_10 <- df %>% arrange(desc(abs(difference))) %>% select(1,2,4,5,3,6,8,9,10,11,12)
+kable(diff_10[1:10,],
+      digits = 3,
+      align = "c",
+      caption = "Arranged by the greatest difference in percentage of reads")
+```
+
+
+
+
+## Table over the main Phylum, here ordered by the size of the **mean** percentage (%)
+
+```{r}
+mean_10 <- df %>% arrange(desc(mean)) %>% select(1,2,4,5,3,6,8,9,10,11,12)
+kable(mean_10[1:10,], 
+      digits = 3,
+      align = "c",
+      caption = "Arranged by the greatest mean percentage of reads")
+```
+
+
+
+
+## Table over the main Phylum, here ordered by the **variance** of the percentage (%) 
+
+```{r}
+var_10 <- df %>% arrange(desc(variance)) %>% select(1,2,4,5,3,6,8,9,10,11,12)
+kable(var_10[1:10,],
+      digits = 3,
+      align = "c",
+      caption = "Arranged by the greatest variance of percentage of reads")
+```
+
+
+# From the table ordering the greatest **difference**, we can se that the largest difference is in the "Unclassified" group. 
+This group can be the agglomeration of several "Unclassified" OTUs (though the barplot indicates that group mainly consists of one OTU) 
+and thus further investigation is required.
+
+In this caseI will only look at "Sjobo140307kl0900" since both downpour samples exhibiths similar "OTU-fingerprints".
+
+```{r echo=TRUE, message=FALSE}
+df <- readRDS("../../phyloseq.rds") # Load phyloseq-object
+
+sequences <- df@otu_table %>% rownames()
+taxa_names(df) <- 1:(df@otu_table %>% nrow)
+
+samples <- c("Sjobo140307kl0900","Sjobo140306")
+df@sam_data$SampleName <- rownames(df@sam_data) # Add the sample ID as a column
+df <- subset_samples(df, SampleName %in% samples) # Choose samples of interest
+df <- prune_taxa(taxa_sums(df) > 1, df) # Remove OTU:s not included in theese samples
+
+unclassified_otus <- df@tax_table[which(is.na(df@tax_table[,2])), 2] %>% rownames()  # Select only "Unclassified", denoted in this dataframe as ""
+df_trans <- transform_sample_counts(df, function(x)  x/sum(x) * 100 )  # Convert into percent
+df_unclassified <- df_trans@otu_table[unclassified_otus,] %>% as.data.frame() %>% rownames_to_column()
+
+df_unclassified$difference <- df_unclassified[,3] - df_unclassified[,2]  # Subtract the OTU-percent to get the difference
+df_print <- df_unclassified %>%
+            as.tibble() %>% 
+            arrange(desc(abs(difference)))
+
+names(df_print)[1] <- "asv_id" 
+
+
+# Do the same for all ASV:s
+df_all <- df_trans@otu_table %>% as.data.frame() %>% rownames_to_column()
+
+df_all$difference <- df_all[,3] - df_all[,2]  # Subtract the OTU-percent to get the difference
+
+df_all$mean_relative_difference <- df_all$difference / rowMeans(df_all[,2:3])
+
+
+df_print <- df_all %>%
+            as.tibble() %>% 
+            arrange(desc(abs(difference)))
+
+kable(df_print[1:10, ],
+      digits = 3,
+      align = "c",
+      caption = "Arranged by the greatest variance of percentage of reads")
+
+kable(df@tax_table[df_print$rowname[1:10],], align = "c")
+
+df_print <- df_print %>% filter(Sjobo140306 > 0 & Sjobo140307kl0900 > 0) %>% arrange(desc(abs(mean_relative_difference)))
+
+kable(df_print[1:10, ],
+      digits = 5,
+      align = "c",
+      caption = "Arranged by the greatest variance of percentage of reads")
+
+sequences[c(24151, 3900, 3926)]
+
+```
+
+
+When filtering OTUs included in both "Sjobo140307kl0900" and "Sjobo140306" we run the risk of removing highly abundant OTUs included only in one of the two samples. 
+This case was investigated and in the file "data/unclassified_otus_sjobo_downpour.rds" we can see that the top 3 otus are the same (i.e. they exist in both samples).
+Since the OTUs are unclassified, we can do a ncbi-BLAST.
+
