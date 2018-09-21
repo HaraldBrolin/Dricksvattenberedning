@@ -1,0 +1,29 @@
+# Count the precense of ASVs given category
+get_unique_based_on_col <- function(phyloseq, var_col) {
+  # Given phyloseq object and column_variable, 
+  # return dataframe with TRUE/FALSE for each ASV orderd by columns based on column_variable levels
+  
+  levels <- get_variable(phyloseq, var_col) %>% unique() # First get the variable levels
+  var_logical_list <- lapply(levels, function(x) get_variable(phyloseq, var_col) == x) # Create a TRUE/FALSE list for pruning the phyloseq object, based on variable level
+  phyloseq_lst <- lapply(var_logical_list, prune_samples, phyloseq) # Create list of differnt phyloseq objects, based on var level filtering
+  
+  # Förlåt Jon riktigt svårtolkat nedan;
+  # För varje phyloseq object, skapa en df med count = TRUE/FALSE beroende på om ASVn finns i minst ett prov (ex ett av Stockholm-proverna)
+  # Inherit rownames from phyloseq, create column name based on vaiable level 
+  
+  asv_var_table <- 
+    do.call(cbind, lapply(phyloseq_lst, 
+                          function(phylo) data.frame(row.names = rownames(phylo@otu_table),
+                                                     count = (apply(phylo@otu_table, 2,
+                                                                    function(x) (x != 0)) %>% rowSums()) > 0)))
+  
+  names(asv_var_table) <- lapply(as.character(levels), paste, "exists", sep = "_")
+  return(asv_var_table)
+}
+
+# To verify function, the sums of the both are corret extreme and group, i have also checked with metSeq all names for group are equal
+# x <- get_unique_based_on_col(df, var_col = "group")
+# df_test <- prune_samples(df@sam_data$location != "Härnösand",df)
+# sum(x$group_exists == ((df_test@otu_table %>% rowSums()) != 0))
+# ((df_test@otu_table %>% rowSums()) != 0) %>% sum
+# sum(x$group_exists)
