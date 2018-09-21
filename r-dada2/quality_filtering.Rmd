@@ -1,0 +1,41 @@
+---
+title: "filter_function_loop"
+author: "Harald Brolin"
+date: "August 23, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r cars, message=FALSE, warning=FALSE}
+library(dada2); packageVersion("dada2")
+```
+
+```{r }
+run_folders <- c("../links/140327/",  "../links/140527/",  "../links/140910/", "../links/140111/",
+                     "../links/141028/",  "../links/141121/", "../links/150123/",  "../links/150421/")
+for (path in run_folders){
+  list.files(path)
+  # Forward and reverse fastq filenames have format: SAMPLENAME_R1_001.fastq and SAMPLENAME_R2_001.fastq
+  fnFs <- sort(list.files(path, pattern="_r1.fq.gz", full.names = TRUE))
+  fnRs <- sort(list.files(path, pattern="_r2.fq.gz", full.names = TRUE))
+  # Extract sample names, assuming filenames have format: SAMPLENAME_XXX.fastq
+  sample.names <- sapply(strsplit(basename(fnFs), "_"), `[`, 1)
+
+  plotQualityProfile(fnFs[1:2])  # Cut-off at 210
+  plotQualityProfile(fnRs[1:2])  # Cut-off at 130
+
+  filt_path <- file.path(path, paste(unlist(strsplit(paste, "/"))[3], "_filtered", sep = "")) # Place filtered files in filtered/ subdirectory
+  filtFs <- file.path(filt_path, paste0(sample.names, "_F_filt.fastq.gz"))
+  filtRs <- file.path(filt_path, paste0(sample.names, "_R_filt.fastq.gz"))
+
+  out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen=c(180,120),
+                     maxN=0, maxEE=c(1,1), truncQ=11, rm.phix=TRUE,
+                     compress=TRUE, multithread=TRUE) # On Windows set multithread=FALSE
+  out[,2] / out[,1]
+  saveRDS(out, file = paste(filt_path, "/filtered_", unlist(strsplit(path, "/"))[3], ".rds", sep = ""))
+}
+```
+
