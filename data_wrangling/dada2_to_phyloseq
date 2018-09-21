@@ -1,0 +1,47 @@
+library(phyloseq); packageVersion("phyloseq")
+library(ggplot2); packageVersion("ggplot2")
+library(tidyverse); packageVersion("tidyverse")
+library(readr)
+
+# ----------------------------------------------------------- Load the taxa-table and remove sequences as names using the tabel ccreated with minBoot = 50%
+taxa <- readRDS("../links/dada2_rds_data/taxa_table_50_species.rds")
+taxa_phylo <- taxa
+
+TAX <- tax_table(taxa_phylo)
+
+# ---------------------------------------------------------- Load the otu data and correct the sample names, i.e. from Water10.13.trollhattn to Overby131013
+otu <- readRDS(file = "../links/dada2_rds_data/st_all.rds")
+sample <- read_delim("../links/new_mapping_file_180202_fixed_names.txt", 
+                     "\t", escape_double = FALSE, trim_ws = TRUE)
+
+# First get the correct sample names, based on the rownames from the OTU, match the metadata
+otu_sample_name <- lapply(otu %>% rownames(), function(x) unlist(strsplit(x, "_"))[1]) %>% unlist
+sample_names <- sample[match(otu_sample_name, sample$`#SampleID`), c(2:6, 9,11,19,25)]$SampleID
+
+# Rename the otu_table sample names
+otu_phylo <- otu %>% t
+reference_sequences <- otu %>% colnames
+colnames(otu_phylo) <- sample_names
+
+OTU <- otu_table(otu_phylo, taxa_are_rows = TRUE)
+
+# ---------------------------------------------------- Merge old and new sample data, this is to add seasons and weather etc.
+sample_phylo <- sample[match(otu_sample_name, sample$`#SampleID`), c(2:6, 9,11,19,25)]
+rownames(sample_phylo) <- sample_phylo$SampleID
+sample_old <- readRDS("../../qiime2_new_filter_method/phyloseq/phyloseq_singletons.rds")
+
+# ------------------------------------------------ Match the sample data and merge the new dataset matching the old one
+merged_sample_data <- cbind(sample_phylo, sample_old@sam_data[match(sample_phylo$SampleID, sample_old@sam_data %>% rownames), ])
+merged_sample_data <- merged_sample_data[c(10:16, 2:5, 7)]
+names(merged_sample_data)[c(2, 8:12)] <- c("run_date", "coliforms", "e_coli", "enterococcus", "grow_able", "ordering")
+
+sample_phylo <- sample_data(merged_sample_data)
+SAM <- sample_data(sample_phylo)
+
+# ------------------------------------------------------- Import tree
+tree <- read_tree("phyloseq_objects/exported-tree/tree.nwk")
+
+physeq <- phyloseq(OTU, SAM, TAX, tree)
+#saveRDS(physeq, file = "phyloseq.rds")
+#saveRDS(reference_sequences, "reference_sequences.rds")
+
