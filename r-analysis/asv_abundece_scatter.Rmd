@@ -1,0 +1,124 @@
+---
+title: "ASV_scatter"
+author: "Harald Brolin"
+date: "September 5, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = TRUE,
+	warning = TRUE
+)
+```
+
+```{r message=FALSE, warning=FALSE}
+library("phyloseq"); packageVersion("phyloseq")
+library("ggplot2"); packageVersion("ggplot2")
+library("tidyverse")
+library("gridExtra")
+library("Hmisc")
+library("knitr")
+library("EnvStats")
+
+df <- readRDS("../phyloseq_v2.rds")
+```
+## Analysis of amplicon sequence variants (ASV) 
+This data has not been rarefied nor has any singletons (or any ASVs for that matter) been removed.
+First we want to investigate the ASVs
+
+```{r all Asv}
+
+# Create df with ASV-stats
+df_otu <- data.frame(row.names = 1:nrow(df@otu_table), # rownames as numbers
+                   asv = df@otu_table %>% rownames(), # asvs
+                   nr_samples = apply(df@otu_table, 2, function(x) (x != 0)) %>% rowSums(), # Count number of sites in which the OTU occurs in
+                   abundence = df@otu_table %>% rowSums(), # Total number of reads
+                   variance = apply(df@otu_table, 1, function(x) (var(x))))
+
+re_abundence <- apply(df@otu_table, 2, function(x) (x / sum(x) )) %>% as.data.frame() # Calulate fraction of reads for all samples
+df_otu$re_abundence <- apply(re_abundence, 1, function(x) (mean(x))) # mean of fraction
+df_otu$re_variance <- apply(re_abundence, 1, function(x) (var(x))) # variance of fraction 
+
+# Count the number of sites each ASV exists in
+count_number_of_sites <- function(loc) {
+  df_loc <- prune_samples(get_variable(df, "location") == loc, df) # Filter based on site
+  asv_loc <- # Creates the df with TRUE / FALSE for each ASV dependent on prescence in location  
+    data.frame(row.names = 1:nrow(df_loc@otu_table),
+                count  = (apply(df_loc@otu_table, 2, function(x) (x != 0)) %>% rowSums()) > 0) # For each sample and each row, does the ASV have a count larger than 0
+  names(asv_loc) <- paste(loc , "exists", sep = "_") # Create column name, Stockholm_exists
+  return(asv_loc)
+}
+
+# Apply the function
+df_number_of_sites <- # Apply function to all locations, column bind a final df
+  do.call(cbind, 
+          lapply(df@sam_data$location %>%
+                   levels, count_number_of_sites))
+
+df_number_of_sites$asv <- df@otu_table %>% rownames() # Get rownames, they are in the same order as df@otu_table
+df_otu$number_of_sites <- df_number_of_sites[,1:6] %>% rowSums() %>% as.factor()# Calculate the the number of lakes of which the ASV occurs
+
+p1 <- ggplot(df_otu , aes(x = nr_samples, y = re_abundence)) + geom_point(aes(color = number_of_sites)) + scale_y_log10() + ggtitle("Scatterplot of mean relative abundence and ASV occurence"); p1
+ggsave(plot = p1, filename = "../../analysis_images/5_asv_scatter_sites.png")
+
+df_otu$Phylum <- df@tax_table[,"Phylum"]
+# df_otu$Class <- df@tax_table[, "Class"] 
+# df_otu$Order <- df@tax_table[, "Order"]
+# df_otu$Family <- df@tax_table[,"Family"]
+
+get_top_taxa <- function(taxa){
+    df_phylum <- tax_glom(df, taxrank = taxa, NArm = FALSE)
+    top_phylum <- df_phylum@otu_table %>% rowSums()
+    top_6 <- top_phylum %>% order(., decreasing = TRUE) %>% head(6) # Arrange taxa by reads, select top 5 (+ NA)
+    return(df_phylum@tax_table[top_6, taxa] %>% as.vector)
+}
+
+taxa_colors <- get_top_taxa("Phylum")
+df_otu$Phylum[which( ! (df_otu$Phylum %in% taxa_colors))] <- "Other" # The taxa not in top_8, set to other
+df_otu$Phylum <- df_otu$Phylum %>% addNA()
+
+p2 <- 
+  ggplot(df_otu,aes(x = nr_samples, y = re_abundence)) +
+  geom_point(aes(color = Phylum)) +
+  scale_y_log10() +
+  ggtitle("Scatterplot of mean relative abundence and ASV occurence"); p2
+
+p2 <- 
+  ggplot(df_otu %>% filter(nr_samples > 50),aes(x = nr_samples, y = re_abundence)) +
+  geom_point(aes(color = Phylum)) +
+  scale_y_log10() +
+  ggtitle("Scatterplot of mean relative abundence and ASV occurence"); p2
+
+p3 <- ggplot(df_otu , aes(x = nr_samples, y = re_abundence)) +
+  geom_point(aes(color = Phylum)) +
+  scale_y_log10() +
+  ggtitle("Scatterplot of mean relative abundence and ASV occurence") +
+  facet_wrap(~Phylum); p3
+
+ggsave(plot = p3, filename = "../../analysis_images/5_asv_scatter_phylum.png")
+
+ggplot(df_otu, aes(y = nr_samples, x = Phylum)) +
+  geom_boxplot(aes(color = Phylum), show.legend = FALSE) +
+  scale_y_log10() + 
+  coord_flip() + 
+  facet_wrap(~number_of_sites) 
+
+# df_bar <- 
+#   df_otu %>% 
+#   group_by(Phylum) %>%
+#   summarise(phylum_cnt = sum(abundence)) %>% 
+#   mutate(taxa_sites = count / sum (count))
+  
+
+ggplot(df_otu, aes(number_of_sites)) + geom_bar(aes(fill = Phylum)) + scale_y_log10()
+
+ggplot(df_otu , aes(x = nr_samples, y = re_abundence)) +
+  geom_point(aes(color = log10(re_variance))) +
+  scale_y_log10() +
+  ggtitle("Scatterplot of mean relative abundence and ASV occurence")
+
+```
+#### Conclusion
+Similar patten can be seen here as in the previous data (filter 130), although we have 35,000 more ASVs. It is also interesting to note that the spread of varance is much smaller, I do not know why this is the case (maybe the difference lies in the use of baseMean, a measurment which is not capped as relative_abundence at 1. It might also be due to the amount of retained reads have almost half the amount of reads comapired to the previous run)
