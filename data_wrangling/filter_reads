@@ -1,0 +1,97 @@
+---
+title: "final touch phyloseq"
+author: "Harald Brolin"
+date: "September 18, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(phyloseq); packageVersion("phyloseq")
+library(ggplot2); packageVersion("ggplot2")
+library(tidyverse); packageVersion("tidyverse")
+library(readr)
+library(Hmisc)
+```
+
+### What we need to do
+
+1. Filter ASVs
+  + Remove long and short reads (2*sd)
+  + Remove Archaea
+  + Remove Unclassified at kingdom level
+2. Metadata
+  + Change treatmen plant to city
+  + Change order of seasons (not necessary here)
+  
+
+
+```{r}
+df <- readRDS("../phyloseq.rds") # Read the data frame
+```
+
+First remove short and long reads
+
+```{r}
+ASV_length <- df@otu_table %>% rownames() %>% nchar
+
+(ASV_length %>% mean) - (ASV_length %>% sd %>% .[1] * 2)  # 242.37 round to 242
+(ASV_length %>% mean) + (ASV_length %>% sd %>% .[1] * 2) # 262.9 round to 263
+
+
+df_pruned <- prune_taxa((ASV_length < 263 & ASV_length > 242), df) # Kept taxa are TRUE
+```
+
+Then remove Archaea and unclassfied at kingdom level
+
+```{r}
+# First unclassified
+tax_table(df_pruned)[,"Kingdom"] %>% is.na %>% sum # 138 ASVs are unclassified or NA at Kingdom
+
+(df_pruned@otu_table[which(tax_table(df_pruned)[,"Kingdom"] %>% is.na), ] %>% rowSums() %>% sum) / (df_pruned@otu_table %>% rowSums() %>% sum) * 100
+# 0.02 % of all reads are after pruning unclassified at Kingdom
+is_classified <- !(tax_table(df_pruned)[,"Kingdom"] %>% is.na) %>% as.vector() # Use of "!" since we want to keep classified
+df_pruned <- prune_taxa(is_classified, df_pruned)
+
+
+# Then Archaea
+(tax_table(df_pruned)[,"Kingdom"]  == "Archaea")  %>% sum # 2103 ASVs are unclassified or NA at Kingdom
+
+(df_pruned@otu_table[which(tax_table(df_pruned)[,"Kingdom"]  == "Archaea"), ] %>% rowSums() %>% sum) / (df_pruned@otu_table %>% rowSums() %>% sum) * 100
+# 0.15 % of all reads are, after pruning, Archaea (since we have removed reads we have sligtly larger than initially reported)
+is_not_archaea <- !(tax_table(df_pruned)[,"Kingdom"]  == "Archaea") %>% as.vector() # Use of "!" since we want to keep classified
+df_pruned <- prune_taxa(is_not_archaea, df_pruned)
+
+```
+
+
+```{r}
+df_pruned@sam_data$location <- df_pruned@sam_data$location %>% as.character()
+df_pruned@sam_data$location[which(df_pruned@sam_data$location == "tallvagen")] <- "Härnösand"
+df_pruned@sam_data$location[which(df_pruned@sam_data$location == "sjobo")] <- "Borås"
+df_pruned@sam_data$location[which(df_pruned@sam_data$location == "rassnas")] <- "Motala"
+df_pruned@sam_data$location[which(df_pruned@sam_data$location == "minnesgardet")] <- "Östersund"
+df_pruned@sam_data$location[which(df_pruned@sam_data$location == "lovo")] <- "Stockholm"
+df_pruned@sam_data$location[which(df_pruned@sam_data$location == "overby")] <- "Trollhättan"
+df_pruned@sam_data$location <- df_pruned@sam_data$location %>% as.factor()
+```
+
+```{r}
+df_pruned@sam_data$season <- # To capitalize the season tag, and restore to factor
+  df_pruned@sam_data$season %>%
+  as.character() %>%
+  capitalize() %>%
+  as.factor()
+
+df_pruned@sam_data$season <- # To reorder the seasons into mor intuitive order
+          factor(df_pruned@sam_data$season,
+                 levels = c("Autumn", "Winter", "Spring", "Summer"))
+```
+
+```{r}
+#saveRDS(df_pruned, file = "../phyloseq_v2.rds")
+```
+
