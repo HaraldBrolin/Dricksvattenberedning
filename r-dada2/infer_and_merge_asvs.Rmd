@@ -1,0 +1,30 @@
+---
+title: "infer_ASV_merge_pairs"
+author: "Harald Brolin"
+date: "August 22, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dada2)
+source("infer_sequence_variants_merge_pair_ends.R") 
+```
+
+### This function takes all the differnet run_folders and first imports the filtered fastq files, secondly calculates the error rates, third dereplicates the reads,
+### fourth sample infers using the error model, fifth merges the paired ends, and finally  constructs a sequence table. All this are done for one sequencing run at a time.
+## Be aware of file sizes since the function reads all given (per sequencing run) reads into RAM (don't know of the files are decompressed in the process).
+
+```{r}
+sequencing_runs <- c("../links/140327/140327_filtered/",  "../links/140527/140527_filtered/",  "../links/140910/140910_filtered/", "../links/140111/140111_filtered/",
+                     "../links/141028/141028_filtered/",  "../links/141121/141121_filtered/", "../links/150123/150123_filtered/",  "../links/150421/150421_filtered/")
+
+for (run in sequencing_runs){
+  try(learn_error_dereplicate_merge_pairs(run))
+}
+
+```
+
