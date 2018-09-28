@@ -1,0 +1,147 @@
+---
+title: "Overby case study"
+author: "Harald Brolin"
+date: "September 24, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+```
+
+```{r message=FALSE, warning=FALSE}
+library("phyloseq"); packageVersion("phyloseq")
+library("ggplot2"); packageVersion("ggplot2")
+library("tidyverse"); packageVersion("tidyverse")
+library("gridExtra"); packageVersion("gridExtra")
+```
+
+```{r functions}
+
+proteo_percentage_per_sample <- function(phylo){
+  # Calculates the percentage of reads attributed to Proteobacteria phylum for each sample
+  # Returns df with sample and corresponding percentage of Proteobacteria
+  proteo_seq <- # Get sequence representing Proteobacteria
+    phylo@tax_table[, "Phylum"] %>%
+    as.data.frame() %>%
+    rownames_to_column() %>%
+    filter(Phylum == "Proteobacteria") %>%
+    select(rowname)
+
+    proteo_sum <- # Get number of reads for proteobacterai sequence
+    phylo@otu_table[((phylo@otu_table %>% rownames) == proteo_seq$rowname) %>% which(),]
+  
+  proteo_perc <- # Divide the row of proteobacteria with corresponding sample total sum
+    proteo_sum / (phylo@otu_table %>% colSums) %>%
+    as.data.frame()
+}
+
+transform_to_proteo_percentage <- function(phylo, percentages){
+  # Creates new OTU_tabl with fraction reads multipled by proteobacteria percentage per sample
+  phylo <- transform_sample_counts(phylo, function(x)  x/sum(x))
+  mat_phylo <- # For all culumns mulitply with percentages, column[2] with percentage[2] etc.
+    mapply("*", phylo@otu_table %>% as.data.frame,
+           percentages$., USE.NAMES = TRUE)
+  
+  colnames(mat_phylo) <- phylo@otu_table %>% colnames()
+  rownames(mat_phylo) <- phylo@otu_table %>% rownames()
+  phylo@otu_table <- mat_phylo %>% otu_table(., taxa_are_rows = TRUE)  
+  return(phylo)
+}
+
+```
+
+
+```{r echo=TRUE, message=FALSE}
+df <- readRDS("../phyloseq_v2.rds")
+```
+
+```{r echo=TRUE, message=FALSE}
+df.old <- df
+df@sam_data$SampleName <-  rownames(df@sam_data)                                                         # Add the sample ID as a column
+df <- subset_samples(df, SampleName %in% c("Overby141016",  "Overby141016kl1010", 
+                                           "Overby141016kl1400","Overby141016kl1550",
+                                           "Overby141023" ,"Overby141028")) 
+                                            # Choose samples of interest
+df <- prune_taxa(taxa_sums(df) != 0, df)                                                                 # Remove OTU:s not included in theese samples
+```
+
+```{r echo=TRUE, message=FALSE, phylum}
+df.phylum <- tax_glom(df, 'Phylum',NArm=F) # Agglomerate the taxa_table to Phylum level
+ASV_sum <- df.phylum@otu_table %>% rowSums() %>% as.data.frame() %>% rownames_to_column %>% as.tibble() # Get sum of reads for each Phylums
+ASV_sum$fraction <- ASV_sum$. / ASV_sum$. %>% sum
+rem_otu <- ASV_sum %>% arrange(desc(fraction)) %>% tail(nrow(.) - 10) # Arange the Phylums based on fraction of total reads, get all except the top 10 phylums
+phylum_not_top_10 <- df.phylum@tax_table[which((df.phylum@otu_table %>% rownames) %in% rem_otu$rowname), "Phylum"] # Get index of all "not-top-10" phylums
+df.phylum@tax_table[which((df.phylum@otu_table %>% rownames) %in% rem_otu$rowname),"Phylum" ] <- "\"Other\"" # Name the group of OTU:s
+
+plot_bar(df.phylum, fill ="Phylum") +
+  scale_x_discrete(labels = c("2014-10-14", "2014-10-16", "2014-10-16",
+                              "2014-10-16", "2014-10-21", "2014-10-28")) # Create the barplot with selected coloring
+
+plot_bar(transform_sample_counts(df.phylum, function(x)  x/sum(x)) , fill ="Phylum") +
+  scale_x_discrete(labels = c("2014-10-14", "2014-10-16", "2014-10-16",
+                              "2014-10-16", "2014-10-21", "2014-10-28")) # Create the barplot with selected coloring
+```
+
+```{r order}
+tax_level <- "Order"
+df.order <- tax_glom(df, tax_level,NArm=F)
+Percentage_MRA <- apply(df.order@otu_table, 1, mean) %>% as.data.frame() %>% rownames_to_column %>% as.tibble()
+ASV_sum$fraction <- ASV_sum$. / ASV_sum$. %>% sum
+rem_otu <- ASV_sum %>% arrange(desc(fraction)) %>% tail(nrow(.) - 10) # Arange the Phylums based on fraction of total reads, get all except the top 10 phylums
+phylum_not_top_10 <- df.order@tax_table[which((df.order@otu_table %>% rownames) %in% rem_otu$rowname), "Phylum"] # Get index of all "not-top-10" phylums
+df.order@tax_table[which(df.order@tax_table[,2] %in% (phylum_not_top_10 %>% as.data.frame() %>% .[[1]] %>% as.character())), "Phylum"] <- "\"Other\""
+
+p1 <- plot_bar(df.order, fill = "Phylum") +
+  scale_x_discrete(labels = c("2014-10-14", "2014-10-16", "2014-10-16",
+                              "2014-10-16", "2014-10-21", "2014-10-28")); p1
+plot_bar(transform_sample_counts(df.order, function(x)  x/sum(x)) , fill ="Phylum") +
+  scale_x_discrete(labels = c("2014-10-14", "2014-10-16", "2014-10-16",
+                              "2014-10-16", "2014-10-21", "2014-10-28"))
+
+```
+
+```{r phylum based on order}
+df_proteo <- subset_taxa(df, Phylum == "Proteobacteria")
+df_proteo_class <- tax_glom(df_proteo, "Class", NArm = FALSE)
+df_proteo_order <- tax_glom(df_proteo, "Order", NArm = FALSE)
+
+
+proteo_percentage <- # Get percentage of proteobacteria per sample
+  proteo_percentage_per_sample(phylo = df.phylum) 
+
+
+df_trans_class <- # Create new transformed otu_table multipled by proteobacteria percentage
+  transform_to_proteo_percentage(phylo = df_proteo_class,
+                                 percentages = proteo_percentage) 
+
+df_trans_order <- # Create new transformed otu_table multipled by proteobacteria percentage
+  transform_to_proteo_percentage(phylo = df_proteo_order,
+                                 percentages = proteo_percentage) 
+
+plot_bar(df_trans_class, fill = "Class") +
+  scale_x_discrete(labels = c("2014-10-14", "2014-10-16", "2014-10-16",
+                              "2014-10-16", "2014-10-21", "2014-10-28"))
+
+plot_bar(df_trans_order, fill = "Class") +
+  scale_x_discrete(labels = c("2014-10-14", "2014-10-16", "2014-10-16",
+                              "2014-10-16", "2014-10-21", "2014-10-28"))
+
+plot_bar(df_trans_order, fill = "Order") +
+  scale_x_discrete(labels = c("2014-10-14", "2014-10-16", "2014-10-16",
+                              "2014-10-16", "2014-10-21", "2014-10-28"))
+
+```
+
+```{r}
+df_proteo_family <- tax_glom(df_proteo, "Family", NArm = FALSE)
+
+df_trans_family <- # Create new transformed otu_table multipled by proteobacteria     percentage
+  transform_to_proteo_percentage(phylo = df_proteo_family,
+                                 percentages = proteo_percentage) 
+plot_bar(df_trans_family, fill = "Family") +
+  scale_x_discrete(labels = c("2014-10-14", "2014-10-16", "2014-10-16",
+                              "2014-10-16", "2014-10-21", "2014-10-28")) +
+  guides(fill = FALSE)
+
+```
