@@ -1,0 +1,154 @@
+---
+title: "Deseq2 season"
+author: "Harald Brolin"
+date: "September 20, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+```
+
+```{r message=FALSE, warning=FALSE}
+library("phyloseq"); packageVersion("phyloseq")
+library("ggplot2"); packageVersion("ggplot2")
+library("tidyverse")
+library("gridExtra")
+library("knitr")
+library("Hmisc")
+library("metagenomeSeq")
+library("DESeq2")
+```
+
+
+### Deseq2 filtering
+We know that deseq2 has problems finding DE ASVs in sparse dataframes and since the aim of this DE-analysis is to find stable ASVs we can remove ASVs not included in all groups.
+
+First we'll remove duplicate and change the rownames into something more read-able
+```{r remove replicates}
+set.seed(2018)
+df <- readRDS("../r-phyloseq/phyloseq_v2.rds") # Read the phyloseq object
+
+sequences <- df@otu_table %>% rownames() # Store the ASV sequences
+taxa_names(df) <- paste("asv_", (1:(df@otu_table %>% nrow)), sep = "") # Rename the ASVs to number from 1 to 40172
+names(sequences) <- taxa_names(df)
+
+
+# We need to do somethin about the three samples taken close in time 
+# "Overby141016kl1010" "Overby141016kl1400" "Overby141016kl1550"
+# I'll keep the one taken at "Overby141016kl1400" 
+# I will also remove "Sjobo140307kl0900"
+df <- prune_samples(!(rownames(df@sam_data) %in% c("Overby141016kl1010", "Overby141016kl1550")), df)
+df <- prune_samples(!(rownames(df@sam_data) == "Sjobo140307kl0900"), df)
+
+# Since we want to test summer vs winter
+df <- prune_samples(df@sam_data$season != "Spring", df)
+df <- prune_samples(df@sam_data$season != "Autumn", df)
+
+df <- prune_taxa(taxa_sums(df) > 0, df) # Remove ASVs with no count in theese samples
+df_ses <- df
+```
+
+We'll test for differnece between autumn/summer and winter/spring
+
+Next since we want to check for differential abundent ASVs we need ASVs included in both groups and since we want to control for season we want the ASV to exist in all seasons. metagenomeSeq has one such function, the drawback is that we need to convert the df to metagenomSeq format (this takes time and could be redone using a simple r-function)
+
+
+```{r Unique function}
+# Count the precense of ASVs given category
+get_unique_based_on_col <- function(phyloseq, var_col) {
+  # Given phyloseq object and column_variable, 
+  # return dataframe with TRUE/FALSE for each ASV orderd by columns based on column_variable levels
+  
+  levels <- get_variable(phyloseq, var_col) %>% unique() # First get the variable levels
+  var_logical_list <- lapply(levels, function(x) get_variable(phyloseq, var_col) == x) # Create a TRUE/FALSE list for pruning the phyloseq object, based on variable level
+  phyloseq_lst <- lapply(var_logical_list, prune_samples, phyloseq) # Create list of differnt phyloseq objects, based on var level filtering
+  
+  # Förlåt Jon svårtolkat nedan;
+  # För varje phyloseq object, skapa en df med count = TRUE/FALSE beroende på om ASVn finns i minst ett prov (ex ett av Stockholm-proverna)
+  # Inherit rownames from phyloseq, create column name based on vaiable level 
+  
+  asv_var_table <- 
+    do.call(cbind, lapply(phyloseq_lst, # Cbind list output to 
+                          function(phylo) data.frame(row.names = rownames(phylo@otu_table),
+                                                     count = (apply(phylo@otu_table, 2,
+                                                                    function(x) (x != 0)) %>% rowSums()) > 0)))
+  
+  names(asv_var_table) <- lapply(as.character(levels), paste, "exists", sep = "_")
+  return(asv_var_table)
+}
+
+
+```
+
+First we choose the variables we are intersted in controling and testing, since we want to control the batch effect we need to include run_date. We want to compair group and thus we need to include it.
+
+Controling for the batch effect on this dataset yeilds no signifcant ASVs and since run_date is correlated with season we'll only use season as a factor.
+
+```{r Härnö get var}
+var_of_interest <- c("season") #, "run_date") #, "location") #, "run_date", "season", "location")
+
+asv_status <-
+  do.call(cbind, lapply(var_of_interest,
+                        function(x) get_unique_based_on_col(df_ses, x)))
+
+common_asvs <- (asv_status %>% rowSums()) == ncol(asv_status) 
+
+df_ses <- prune_taxa(common_asvs, df_ses)
+```
+
+
+### Deseq2 Analysis 
+Looking for differential abundent ASVs
+
+
+```{r Härnö deseq2 and plot}
+
+p1 <- plot_ordination(df_ses, ordination = ordinate(df_ses, method = "PCoA", distance = "uunifrac"), color = "season"); p1
+
+diagdds <- phyloseq_to_deseq2(df_ses, ~ season) # Define the formula and convert data
+diagdds <- DESeq(diagdds, test="Wald", fitType="parametric", parallel = TRUE , betaPrior = TRUE) 
+
+deseq_result <- results(diagdds, cooksCutoff = FALSE) # Extract the result from deiaggds 
+
+deseq_result %>% head(0)
+
+result_plot <- 
+  ggplot(as(deseq_result, "data.frame"), aes(x = baseMean, y = log2FoldChange)) +
+  geom_point(aes(color = padj < 0.001)) + scale_x_log10()
+
+significant_table <- deseq_result[which(deseq_result$padj < 0.001), ] # Filter result table based on alpha
+
+significant_table <-  # Bind taxonomic information with ASVs
+  cbind(
+  as(significant_table, "data.frame"),
+  as(tax_table(df_ses)[rownames(significant_table), ], "matrix"))
+  
+
+df_plot <- significant_table %>% rownames_to_column() # To generate a ggplot df
+
+ggplot(df_plot %>% arrange(Phylum, log2FoldChange),
+       aes(x = factor(rowname, levels = rowname), y = log2FoldChange)) +
+  geom_col(aes(fill = Phylum)) +
+  coord_flip() +
+  guides(fill = guide_legend(reverse = TRUE)) +
+  theme(axis.title.y = element_blank())
+
+ggplot(df_plot %>% arrange(log2FoldChange),
+       aes(x = factor(rowname, levels = rowname), y = log2FoldChange)) +
+  geom_col(aes(fill = Phylum)) +
+  coord_flip() +
+  theme(axis.title.y = element_blank())
+
+significant_table %>% nrow()
+```
+
+# Conclusion 
+No significant ASVs for the seasons
+
+
+---------------------------------
+
+
+
+
