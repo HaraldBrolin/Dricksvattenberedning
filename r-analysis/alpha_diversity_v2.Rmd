@@ -1,0 +1,321 @@
+---
+title: "Apha diversity v.2"
+author: "Harald Brolin"
+date: "September 25, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = TRUE
+)
+```
+
+```{r message=FALSE, warning=FALSE}
+library(phyloseq); packageVersion("phyloseq")
+library(ggplot2); packageVersion("ggplot2")
+library(tidyverse); packageVersion("tidyverse")
+library(readr)
+library(gridExtra)
+library(EnvStats)
+library(Hmisc)
+```
+
+```{r}
+df <- readRDS("../phyloseq_v2.rds") # Read the data frame
+```
+
+### Alpha-diversity 
+First we ant to look at the alpha diversity for the diffent samples. Several diversity matrices exist, some highlight differnece in evenness, abundence of rare species, abundence of common species etc. This article [link](https://www.biorxiv.org/content/biorxiv/early/2017/12/11/231878.full.pdf) states that "However, since estimates for alpha diversity metrics are heavily biased when taxa are unobserved, comparing alpha diversity using either raw or rarefied data should not be undertaken."  "While the example discussed here is richness, this approach to estimating and comparing alpha diversity using a bias correction (incorporating unobserved taxa) and a variance adjustment (measurement error model) could apply to any alpha diversity metric." The article advises agains the use of **richness**. 
+
+The article mentions **Shannon** and **Simpson**:
+"In contrast, the coverage adjusted entropy estimator
+of the Shannon index (Chao & Shen 2003) provides variance estimates and accounts
+for unobserved taxa, but is extremely sensitive to the singleton count,
+which is often difficult to determine in microbiome studies. Similarly, the minimum
+variance unbiased estimate of the Simpson index (Zhang & Zhou 2010)
+does not account for unobserved taxa."
+
+**Shannon**: Calculates richness and diversity using a natural logarithm, accounts for both abundance and evenness of the taxa present. *Shannon, C.E. and Weaver, W. (1949). “The mathematical theory of communication”. University of Illonois Press, Champaign, Illonois.*  
+
+**Simpson’s index** : Calculates Simpson’s index, measures the relative abundance of the different species making up the sample richness
+*Simpson, E.H. (1949). “Measurement of diversity". Nature. (163): 688.*
+
+Information about the measurments: [link](https://forum.qiime2.org/t/alpha-and-beta-diversity-explanations-and-commands/2282)
+
+
+
+First we want to look at the different measurments and how they handel sequence_depth and our batch effect: 
+
+```{r create richness table}
+richness_df <- 
+  estimate_richness(df,
+                    split = TRUE, # Calculate for all samples an not for each group
+                    measures = c("Observed", "Chao1", "Shannon", "Simpson")) # The measurments which are caluclated
+richness_df <- # Merge the alpha-div measurments with metadat
+  cbind(richness_df, df@sam_data)
+
+```
+
+
+```{r correaltion sequene_run}
+richness_df$sample_depth <- df@otu_table %>% colSums() # Add depth to metadata, for each sample
+
+# Scatterplot of index vs depth, to investigate correlation
+
+p1 <- ggplot(richness_df, aes(x = Chao1, y = sample_depth)) +
+  geom_point(aes(color = run_date)) +
+  geom_smooth(method='lm',formula=y~x) 
+
+p2 <- ggplot(richness_df, aes(x = Observed, y = sample_depth)) +
+  geom_point(aes(color = run_date)) +
+  geom_smooth(method='lm',formula=y~x)
+# Looking at log10 data does not change the structure
+
+p3 <- ggplot(richness_df, aes(x = Shannon, y = sample_depth)) +
+  geom_point(aes(color = run_date))  +
+  geom_smooth(method='lm',formula=y~x)
+
+p4 <- ggplot(richness_df, aes(x = Simpson, y = sample_depth)) +
+  geom_point(aes(color = location)) +
+  geom_smooth(method='lm',formula=y~x)
+
+p5 <- ggplot(richness_df %>%
+               rownames_to_column() %>%
+               filter(rowname != "Rassnas140417"),
+             aes(x = Simpson, y = sample_depth)) +
+  geom_point(aes(color = run_date)) +
+  geom_smooth(method='lm',formula=y~x) + 
+  ggtitle("Rassnas140417 removed")
+  
+
+grid.arrange(p1,p2)
+grid.arrange(p3,p5)
+ggsave(plot = grid.arrange(p3,p5), filename = "../../analysis_images/1_shannon_Simpson_outlier_rem_scatter.png")
+```
+
+
+### Conclusion:
+For both Chao1 and Observed (*Richness*) we have a strong correlation, we can also see that the different run_dates are clustered toghter. Looking at Shannon and Simpson we can see that the correlation is not as strong, although we still see a clustering based on run_date but the clustering does not seem as "linear". *Note that since we use a linear model we are susceptible to outliers*. 
+
+One outlier that becomes apperent is Motal, Rassnas140414 where about 47% of reads are attributed to one ASV. This outlier has been removed in the plot above. 
+
+### Linear scatter plot
+```{r linear scatter plot}
+
+p7 <-  # Plot longitudinal scatter,ordered based on sampling_date
+  ggplot(richness_df,aes(x = sampling_date, y = Simpson, group = season)) +
+  facet_wrap(~location) + # One plot for each location
+  geom_line(aes(group = location)) + # Add the line
+  geom_point(aes(group = season, color = season)) + # Color points by season
+  ggtitle("Simpson index") +
+  coord_cartesian(ylim = c(0.9, 1)) + # zoom into pot to remove outliers
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x =  element_blank(),
+        axis.ticks = element_blank(),
+        legend.text = element_text(size = 10),
+        legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5)); p7 # Formatting
+
+p5 <- 
+  ggplot(richness_df,aes(x = sampling_date, y = Shannon, group = season)) +
+  facet_wrap(~location) +
+  geom_line(aes(group = location)) +
+  geom_point(aes(group = season, color = season)) +
+  ggtitle("Shannon index") +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x =  element_blank(),
+        axis.ticks = element_blank(),
+        legend.text = element_text(size = 10),
+        legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5)); p5 # Formatting
+
+ggsave(plot = p7, filename = "../../analysis_images/1_simpson_line.png")
+ggsave(plot = p5, filename = "../../analysis_images/1_shannon_line.png")
+```
+
+#### Conclusion Scatter plot
+Simpson:
+We have two clear outliers in the Simpsons plot Overby130926 0.8980723 at and Rassnas140417 at 0.8087959. **IMPORTANT: note that the phyloseq Simpsons => 1 - Simpsons**. In gernerall we see a decrease in index during late autumn early winter, conclusions about winter can be hard to draw since we have relatively few winter samples. We can also see an overall increase in index during early summer and peaks occuring during autumn.
+
+Shannon:
+In generall the index is highest for summer, with autumn closely following. All locations except Östersund displays a dip in index during mid-late spring.
+
+
+### Box plot season
+```{r echo=FALSE}
+plot_theme <- # Formats plot, removes axis labels and increase font size
+  theme(axis.text.x = element_text(size = 12),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        legend.text = element_text(size = 12),
+        legend.title = element_blank(),
+        legend.key = element_blank(),
+        plot.title = element_text(hjust = 0.5))
+
+# ----------------------------   plot dependent on location
+
+p1 <- # Assign only to get the rmarkdown picture 
+  ggplot(richness_df,
+         aes(x = location, y = Shannon,  fill = season)) + # Plot shannon one bar per each location
+          geom_boxplot() +
+          stat_n_text() + # From EnvStat package, gives the number of samples per group
+          ggtitle("Shannon index") +
+          plot_theme # Change font size and print plot
+
+# richness_df %>% rownames_to_column() %>% filter(rowname != "Rassnas140417"
+
+p2 <- # Assign only to get the rmarkdown picture Remove oulier Rassnas140417
+  ggplot(richness_df,
+         aes(x = location, y = Simpson,  fill = season)) + # Plot simpson
+          geom_boxplot() +
+          stat_n_text() + # From EnvStat package, gives the number of samples per group
+          ggtitle("Simpson index, outlier Rassnas140417") +
+          plot_theme # Change font size and print plot
+
+
+# ----------------------------   plot dependent on season
+p3 <- # Assign only to get the rmarkdown picture 
+  ggplot(richness_df, aes(x = season, y = Shannon,  fill = location)) + # Plot shannon one bar per each location
+          geom_boxplot() +
+          stat_n_text() + # From EnvStat package, gives the number of samples per group
+          ggtitle("Shannon index") +
+          plot_theme; p3 # Change font size and print plot
+
+# richness_df %>% rownames_to_column() %>% filter(rowname != "Rassnas140417"
+
+p4 <- # Assign only to get the rmarkdown picture Remove oulier Rassnas140417
+  ggplot(richness_df ,aes(x = season, y = Simpson,  fill = location)) + # Plot simpson
+          stat_n_text() + 
+          # coord_cartesian(ylim = c(0.9, 1)) +
+          geom_boxplot() +
+          # From EnvStat package, gives the number of samples per group
+          ggtitle("Simpson index, outlier Rassnas140417") +
+          plot_theme; p4   # Change font size and print plot
+
+
+grid.arrange(p1,p2, ncol = 1)
+ggsave(plot = p3, filename = "../../analysis_images/1_shannon_box.png")
+ggsave(plot = p4, filename = "../../analysis_images/1_simpson_box.png")
+
+```
+
+
+#### Conclusion box plot
+Simpson: Winter and spring seems to be the most similar, looking at the mean. Summer seems to display the lowest variance.
+
+Shannon:
+Autumn and summer seems to be most similar in terms of mean, with autumn showing the greatest variance.
+
+
+### Anova test
+First we need to investigate the normality of the Shannon index. 
+** **
+```{r echo=TRUE}
+# FIrst we'll look if the Shannon index is normally distributed.
+
+ggplot(richness_df, aes(x = Shannon)) + geom_density()
+
+# Model SHannon dependent on location + season + run_date
+# We also model interactions between season and run_date, season and location
+location_anova <- aov(Shannon ~ location + season + run_date,
+                      data = richness_df)
+
+summary.aov(location_anova)
+
+```
+
+### Conclusion
+We can also test for interactions between factors, we tested for season:location and season:run_date. Season:run_date was significant and location:season was almost significant. Opted out of using theese interactions. 
+
+## Pairwise test
+non-paramteric test: wilcoxon
+parametric: t-test
+
+```{r}
+
+pairwise.wilcox.test(richness_df$Shannon,
+                     richness_df$location,
+                     p.adjust.method = "BH")
+
+pairwise.t.test(richness_df$Shannon,
+                richness_df$location,
+                 p.adjust.method = "BH")
+
+# ---------------- For location
+
+pairwise.wilcox.test(richness_df$Shannon,
+                     richness_df$season,
+                     p.adjust.method = "BH")
+
+pairwise.t.test(richness_df$Shannon,
+                richness_df$season,
+                p.adjust.method = "BH")
+
+```
+
+<!-- ### Alpha diversity minnesgardet, overby -->
+<!-- Next we want to do the same analysis for Overby and Minnesgardet -->
+<!-- ```{r} -->
+<!-- df <- # Keep samples based on location  -->
+<!--   prune_samples(df@sam_data$location == "Östersund" | df@sam_data$location == "Trollhättan" , df)   -->
+
+<!-- df <- # Remove taxa not existing in theses samples -->
+<!--   prune_taxa(taxa_sums(df@otu_table) != 0, df) -->
+
+<!-- richness_df <-  -->
+<!--   estimate_richness(df, -->
+<!--                     split = TRUE, -->
+<!--                     measures = c("Observed", "Chao1", "Shannon", "Simpson" )) -->
+
+<!-- richness_df <-  -->
+<!--   cbind(richness_df, df@sam_data) -->
+
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- # Here we plot the longitudinal scatterplots, shwoing the change of the index over time -->
+<!-- # One line both for Östersund and Trollhättan are showing with color indicating the season -->
+
+<!-- p4 <-  -->
+<!--   ggplot(richness_df, aes(x = sampling_date, y = Simpson, group = location)) + -->
+<!--   geom_line(aes(linetype = location, group = location)) + -->
+<!--   ggtitle("Simpson index") + -->
+<!--   geom_point(aes(group = season, color = season)) + -->
+<!--   theme(axis.title.x = element_blank(),  -->
+<!--         axis.title.y = element_blank(), -->
+<!--         axis.text.x =  element_blank(), -->
+<!--         axis.ticks = element_blank(), -->
+<!--         legend.text = element_text(size = 10), -->
+<!--         legend.title = element_blank(), -->
+<!--         legend.key = element_blank(), -->
+<!--         legend.position = "bottom",  -->
+<!--         plot.title = element_text(hjust = 0.5)); p4 -->
+
+<!-- p5 <-  -->
+<!--   ggplot(richness_df, aes(x = sampling_date, y = Shannon, group = location)) + -->
+<!--   geom_line(aes(linetype = location, group = location)) + -->
+<!--   geom_point(aes(group = season, color = season)) + -->
+<!--   ggtitle("Shannon index") +  -->
+<!--   theme(axis.title.x = element_blank(),  -->
+<!--         axis.title.y = element_blank(), -->
+<!--         axis.text.x =  element_blank(), -->
+<!--         axis.ticks = element_blank(), -->
+<!--         legend.text = element_text(size = 10), -->
+<!--         legend.title = element_blank(), -->
+<!--         legend.key = element_blank(), -->
+<!--         legend.position = "bottom",  -->
+<!--         plot.title = element_text(hjust = 0.5)); p5 -->
+
+<!-- ggsave(plot = p4, filename = "../../analysis_images/1_simpson_line_two.png") -->
+<!-- ggsave(plot = p5, filename = "../../analysis_images/1_shannon_line_two.png") -->
+<!-- ``` -->
+
+
+
+
+
