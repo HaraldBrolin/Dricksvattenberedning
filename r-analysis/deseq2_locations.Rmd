@@ -2,7 +2,8 @@
 title: "Deseq2 locations"
 author: "Harald Brolin"
 date: "September 20, 2018"
-output: html_document
+output:
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -52,10 +53,9 @@ df_ost <- prune_samples(df@sam_data$location != "Östersund", df) # Keep only sa
 df_ost <- prune_taxa(taxa_sums(df_ost) > 0, df_ost) # Remove ASVs with no count in theese samples
 
 df_ost@sam_data$group <- NA
-df_ost@sam_data$group[which(df_ost@sam_data$location == "Härnösand")] <- "extreme"
-df_ost@sam_data$group[which(df_ost@sam_data$location != "Härnösand")] <- "group"
+df_ost@sam_data$group[which(df_ost@sam_data$location == "Härnösand")] <- "Extreme_location"
+df_ost@sam_data$group[which(df_ost@sam_data$location != "Härnösand")] <- "Grouped_locations"
 
-# df@sam_data <- df@sam_data %>% rownames_to_column %>% mutate(group = case_when(location == "Härnösand" ~ 0, location != "Härnösand" ~ 1 )) 
 ```
 
 Next since we want to check for differential abundent ASVs we need ASVs included in both groups and since we want to control for season we want the ASV to exist in all seasons. metagenomeSeq has one such function, the drawback is that we need to convert the df to metagenomSeq format (this takes time and could be redone using a )
@@ -71,7 +71,7 @@ get_unique_based_on_col <- function(phyloseq, var_col) {
   var_logical_list <- lapply(levels, function(x) get_variable(phyloseq, var_col) == x) # Create a TRUE/FALSE list for pruning the phyloseq object, based on variable level
   phyloseq_lst <- lapply(var_logical_list, prune_samples, phyloseq) # Create list of differnt phyloseq objects, based on var level filtering
   
-  # Förlåt Jon riktigt svårtolkat nedan;
+  # Förlåt Jon  svårtolkat nedan;
   # För varje phyloseq object, skapa en df med count = TRUE/FALSE beroende på om ASVn finns i minst ett prov (ex ett av Stockholm-proverna)
   # Inherit rownames from phyloseq, create column name based on vaiable level 
   
@@ -85,6 +85,8 @@ get_unique_based_on_col <- function(phyloseq, var_col) {
   return(asv_var_table)
 }
 
+# ---------------- Code below to verify my function using metagenomeSeq
+
 # To verify function, the sums of the both are corret extreme and group, i have also checked with metSeq all names for group are equal
 # x <- get_unique_based_on_col(df, var_col = "group")
 # df_test <- prune_samples(df@sam_data$location != "Härnösand",df)
@@ -94,16 +96,20 @@ get_unique_based_on_col <- function(phyloseq, var_col) {
 
 ```
 
-First we choose the variables we are intersted in controling and testing, since we want to control the batch effect we need to include run_date. We want to compair group and thus we need to include it.
+First we choose the variables we are intersted in controling and testing, since we want to control the batch effect we need to include run_date. We want to compare group and thus we need to include it.
+
+Controling for batch-effect can be done by using the run_date as a factor.
 
 ```{r Härnö get var}
-var_of_interest <- c("group", "run_date") #, "run_date", "season", "location")
+var_of_interest <- c("group", "run_date")
 
 asv_status <-
   do.call(cbind, lapply(var_of_interest,
                         function(x) get_unique_based_on_col(df_ost, x)))
 
-common_asvs <- (asv_status %>% rowSums()) == ncol(asv_status) 
+asv_status %>% head() # output from get_unique_based_on_col
+
+common_asvs <- (asv_status %>% rowSums()) == ncol(asv_status) # ASVs existing in all columns
 
 df_ost <- prune_taxa(common_asvs, df_ost)
 ```
@@ -140,18 +146,23 @@ deseq_2_and_result <- function(phylo, rarefy, betaPrior, alpha, dispersionPlot){
     as(significant_table, "data.frame"),
     as(tax_table(phylo)[rownames(significant_table), ], "matrix"))
   
-  return(list(significant_table, result_plot)) # Return the final table but also the DESeq outpt, since it is needed for a plot
+  return(list(significant_table, result_plot, deseq_result %>% head(0))) # Return the final table but also the DESeq outpt, since it is needed for a plot
 }
 
 
 ```
 
+#### Rarefying:
+Rarefying the data before doing a DE-analysis has been shown to have FDR reducing effect on data with large lib-size differences. But since the data is already filtered (from 18000 ASVs to ~400) and when we evaluated the result of the DE-analysis for rarefied data we noticed more significant ASVs.
 
 ```{r Härnö deseq2 and plot}
-deseq_1 <- deseq_2_and_result(df_ost, rarefy = TRUE, betaPrior = TRUE, alpha = 0.001, dispersionPlot = TRUE)
-deseq_2 <- deseq_2_and_result(df_ost, rarefy = FALSE, betaPrior = TRUE, alpha = 0.001, dispersionPlot = FALSE)
+deseq_1 <- deseq_2_and_result(df_ost,
+                              rarefy = FALSE,
+                              betaPrior = TRUE,
+                              alpha = 0.001,
+                              dispersionPlot = TRUE)
 
-
+deseq_1[[3]] # show the model
 deseq_1[[2]] # Scatter plot of significant ASVs
 
 df_plot <- deseq_1[[1]] %>% rownames_to_column() # To generate a ggplot df
@@ -172,9 +183,7 @@ ggplot(df_plot %>% arrange(log2FoldChange),
 
 
 
-
 ---------------------------------
-
 
 
 
@@ -193,7 +202,7 @@ asv_scatter_plot$in_model <-
   case_when((asv_scatter_plot %>% rownames()) %in% (df_ost@otu_table %>% rownames()) == FALSE ~ "Not in model",
             (asv_scatter_plot %>% rownames()) %in% (df_ost@otu_table %>% rownames()) == TRUE ~ "Not significant")
 
-asv_scatter_plot$in_model[(asv_scatter_plot %>% rownames()) %in% (deseq_1[[2]] %>% rownames())] <- 
+asv_scatter_plot$in_model[(asv_scatter_plot %>% rownames()) %in% (deseq_1[[1]] %>% rownames())] <- 
   "Significant"
 
 ggplot(asv_scatter_plot, aes(y = re_abundence, x = nr_samples)) + geom_point(aes(color = in_model)) + scale_y_log10()
@@ -209,10 +218,9 @@ df_harno <- prune_samples(df@sam_data$location != "Härnösand", df) # Keep only
 df_harno <- prune_taxa(taxa_sums(df_harno) > 0, df_harno) # Remove ASVs with no count in theese samples
 
 df_harno@sam_data$group <- NA
-df_harno@sam_data$group[which(df_harno@sam_data$location == "Östersund")] <- "extreme"
-df_harno@sam_data$group[which(df_harno@sam_data$location != "Östersund")] <- "group"
+df_harno@sam_data$group[which(df_harno@sam_data$location == "Östersund")] <- "Extreme_location"
+df_harno@sam_data$group[which(df_harno@sam_data$location != "Östersund")] <- "Grouped_locations"
 
-# df@sam_data <- df@sam_data %>% rownames_to_column %>% mutate(group = case_when(location == "Härnösand" ~ 0, location != "Härnösand" ~ 1 )) 
 ```
 
 
@@ -229,10 +237,13 @@ df_harno <- prune_taxa(common_asvs, df_harno)
 ```
 
 ```{r Östersund result and plot}
-deseq_3 <- deseq_2_and_result(df_harno, rarefy = TRUE, betaPrior = TRUE, alpha = 0.001, dispersionPlot = TRUE)
-deseq_4 <- deseq_2_and_result(df_harno, rarefy = FALSE, betaPrior = TRUE, alpha = 0.001, dispersionPlot = FALSE)
+deseq_3 <- deseq_2_and_result(df_harno,
+                              rarefy = FALSE,
+                              betaPrior = TRUE,
+                              alpha = 0.001,
+                              dispersionPlot = TRUE)
 
-
+deseq_3[[3]]
 deseq_3[[2]] # Scatter plot of significant ASVs
 
 df_plot <- deseq_3[[1]] %>% rownames_to_column() # To generate a ggplot df
@@ -249,23 +260,6 @@ ggplot(df_plot %>% arrange(log2FoldChange),
   geom_col(aes(fill = Phylum)) +
   coord_flip() + 
   theme(axis.title.y = element_blank())   
-
-deseq_4[[2]] # Scatter plot of significant ASVs
-
-df_plot <- deseq_4[[1]] %>% rownames_to_column() # To generate a ggplot df
-
-ggplot(df_plot %>% arrange(Phylum, log2FoldChange),
-       aes(x = factor(rowname, levels = rowname), y = log2FoldChange)) +
-  geom_col(aes(fill = Phylum)) +
-  coord_flip() + 
-  guides(fill = guide_legend(reverse = TRUE)) + 
-  theme(axis.title.y = element_blank())
-          
-ggplot(df_plot %>% arrange(log2FoldChange),
-       aes(x = factor(rowname, levels = rowname), y = log2FoldChange)) +
-  geom_col(aes(fill = Phylum)) +
-  coord_flip() + 
-  theme(axis.title.y = element_blank()) 
 ```
 
 
@@ -282,21 +276,22 @@ asv_scatter_plot$in_model <-
   case_when((asv_scatter_plot %>% rownames()) %in% (df_ost@otu_table %>% rownames()) == FALSE ~ "Not in model",
             (asv_scatter_plot %>% rownames()) %in% (df_ost@otu_table %>% rownames()) == TRUE ~ "Not significant")
 
-asv_scatter_plot$in_model[(asv_scatter_plot %>% rownames()) %in% (deseq_3[[2]] %>% rownames())] <- 
+asv_scatter_plot$in_model[(asv_scatter_plot %>% rownames()) %in% (deseq_3[[1]] %>% rownames())] <- 
   "Significant"
 
 ggplot(asv_scatter_plot, aes(y = re_abundence, x = nr_samples)) + geom_point(aes(color = in_model)) + scale_y_log10()
 ```
 
 
+### Östersun vs Härnösand
+Below we'll see the number of significant ASVs. We'll also record the signifcant ASVs and write them to file.
+
 ```{r comparison Östersund Härnösand}
 df_ost
 deseq_1[[1]] %>% nrow
-deseq_2[[1]] %>% nrow
 
 df_harno
 deseq_3[[1]] %>% nrow
-deseq_4[[1]] %>% nrow
 
 capture.output(deseq_1[[1]] %>% rownames() %>% as.data.frame() %>% print.data.frame(., quote = FALSE, row.names = FALSE), file = "ostersund_signf_asv.txt")
 capture.output(deseq_3[[1]] %>% rownames() %>% as.data.frame() %>% print.data.frame(., quote = FALSE, row.names = FALSE), file = "harnosand_signf_asv.txt")
@@ -304,4 +299,3 @@ capture.output(deseq_3[[1]] %>% rownames() %>% as.data.frame() %>% print.data.fr
 ```
 
 #### Conclusion:
-Rarefying seems to increase the number of significant ASVs, this is agains my presumptiom since rarefying should reduce FDR. 
