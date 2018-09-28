@@ -36,20 +36,16 @@ x <- df@tax_table[,7] %>% as.factor() %>% levels; x[1:10] #
 ### Conclusions
 Looking at differnt classifications at the different levels we see that no reads are classififed as ambiguously, this leads me to believe that theese reads are instead classified as **NA**, this would also explan the higher degree of NA reads comapired to the "original"-data (although a reason for the lower percentage of NA:s could be the 130 filter). Looking at the kingdom level we have some ASVs classified as Arcaea, further investigation is needed. Also note that for species we get several matches idicated with a "/", this is due to the allowMultiple setting in the assignSpecies in the dada2 package. Theese are exact matches. 
 
-```{r}
-taxa_sums(df)[which(df@tax_table[,1] == "Archaea")] %>% sum / taxa_sums(df) %>% sum * 100 # To get the percentage of reads that is attriubuted to Archaea
-taxa_sums(df)[which(df@tax_table[,1] %>% is.na)] %>% sum / taxa_sums(df) %>% sum * 100 # To get the percentage of reads that is unclassified
-```
+<!-- # taxa_sums(df)[which(df@tax_table[,1] == "Archaea")] %>% sum / taxa_sums(df) %>% sum * 100 # To get the percentage of reads that is attriubuted to Archaea -->
+<!-- # taxa_sums(df)[which(df@tax_table[,1] %>% is.na)] %>% sum / taxa_sums(df) %>% sum * 100 # To get the percentage of reads that is unclassified -->
+<!-- # ``` -->
 
 <!-- Only a small part 0.14% of the reads are attributed to Archaea, even though theese reads should be removed since we are interested in the bacterial community. The part unclassified reads at kingdom level is 1.58%, some of are likley to not be bacterial ASVs an thus does not exist in the 16S reference sequence databse. -->
 
 <!-- #### Remove the Archaea -->
-<!-- ```{r remove archaea} -->
 <!-- df <- subset_taxa(df, Kingdom != "Archaea") # To remove archaea but keep NA:s -->
-<!-- ``` -->
 
 ```{r prune and glom}
-# df <- prune_samples(df@sam_data$location == "overby", df)
 df <- prune_taxa(taxa_sums(df@otu_table) != 0, df)
 df_class <- tax_glom(df, "Class", NArm = FALSE)
 ```
@@ -59,12 +55,12 @@ df_class <- tax_glom(df, "Class", NArm = FALSE)
 # Output: Counts attributed to phylum tag divided by total number of reads for all samples included in phyloseq df
 # Comment : Should be run for un-transformed OTU-table. 
 reads_for_phylum <- 
-  function(df_level, phylum_tag) {
-    asv_index <- (tax_table(df_level)[,2] == phylum_tag) %>% which() # Ge index for each asv belonging to phylum_tag
-    reads_per_asv <- df_level@otu_table[asv_index,] %>% rowSums() # 
-    phylum_sum <- reads_per_asv %>% sum
-    total_read_sum <- df_level %>% taxa_sums() %>% sum()
-    phylum_tag_relative_abundence <- phylum_sum / total_read_sum
+  function(df_level, phylum_tag) { # This function will run for all given tags, i.e for all phylum levels
+    asv_index <- (tax_table(df_level)[,2] == phylum_tag) %>% which() # Since we are acting on a "Class"-table get index for each asv belonging to phylum_tag
+    reads_per_asv <- df_level@otu_table[asv_index,] %>% rowSums() # sum of each phylum
+    phylum_sum <- reads_per_asv %>% sum # total sum
+    total_read_sum <- df_level %>% taxa_sums() %>% sum() 
+    phylum_tag_relative_abundence <- phylum_sum / total_read_sum # Get fraction of abundence for each unqiue phylum level
 }
 
 tags <- df_class@tax_table[,2] %>%
@@ -91,32 +87,32 @@ plot_bar_for_each_lake <- function(site){
 
 plots <- lapply(df@sam_data$location %>% unique, plot_bar_for_each_lake)
 
-#plots
+plots
 
 
 ```
-```{r}
-overby_samples <- c("Overby141016",  "Overby141016kl1010",  "Overby141016kl1400",  "Overby141016kl1550", "Overby141023" ,"Overby141028")
-sjobo_samples <- c("Sjobo131205", "Sjobo140306" ,  "Sjobo140307kl0900", "Sjobo140307kl1200", "Sjobo140318","Sjobo140404")
 
-plot_bar_case_study <- function(samples){
-  df_temp <- prune_samples(df@sam_data %>% rownames() %in% samples, df) # Filter the samples we want
-  df_temp <- prune_taxa(taxa_sums(df_temp@otu_table) != 0, df_temp)
-  df_class <- tax_glom(df_temp, "Class", NArm = FALSE)
-  df_temp <- transform_sample_counts(df_temp, function(x) x/ sum(x))
-  plot <- # Creates a plot of abundence, the function orders samples based on sample_name. Since we want other names we first need to order the naming vactor
-    plot_bar(df_temp, fill = "Phylum") +
-    facet_grid(~location, scales = "free_x") +
-    scale_x_discrete(labels = df_temp@sam_data$sampling_date %>% as.character() %>% sort) + # Rename the x-labels, note that I reorder the names (just as phyloseq does)
-    theme(axis.text.x = element_text(vjust = 0.5))
-  
-  ggsave(plot = plot, filename = paste("../../analysis_images/6_bar_", samples[1], ".png", sep = ""))
-  return(plot)
-}
 
-plots <- plot_bar_case_study(overby_samples)
-plots <- plot_bar_case_study(sjobo_samples)
-```
+<!-- # overby_samples <- c("Overby141016",  "Overby141016kl1010",  "Overby141016kl1400",  "Overby141016kl1550", "Overby141023" ,"Overby141028") -->
+<!-- # sjobo_samples <- c("Sjobo131205", "Sjobo140306" ,  "Sjobo140307kl0900", "Sjobo140307kl1200", "Sjobo140318","Sjobo140404") -->
+<!-- #  -->
+<!-- # plot_bar_case_study <- function(samples){ -->
+<!-- #   df_temp <- prune_samples(df@sam_data %>% rownames() %in% samples, df) # Filter the samples we want -->
+<!-- #   df_temp <- prune_taxa(taxa_sums(df_temp@otu_table) != 0, df_temp) -->
+<!-- #   df_class <- tax_glom(df_temp, "Class", NArm = FALSE) -->
+<!-- #   df_temp <- transform_sample_counts(df_temp, function(x) x/ sum(x)) -->
+<!-- #   plot <- # Creates a plot of abundence, the function orders samples based on sample_name. Since we want other names we first need to order the naming vactor -->
+<!-- #     plot_bar(df_temp, fill = "Phylum") + -->
+<!-- #     facet_grid(~location, scales = "free_x") + -->
+<!-- #     scale_x_discrete(labels = df_temp@sam_data$sampling_date %>% as.character() %>% sort) + # Rename the x-labels, note that I reorder the names (just as phyloseq does) -->
+<!-- #     theme(axis.text.x = element_text(vjust = 0.5)) -->
+<!-- #    -->
+<!-- #   ggsave(plot = plot, filename = paste("../../analysis_images/6_bar_", samples[1], ".png", sep = "")) -->
+<!-- #   return(plot) -->
+<!-- # } -->
+<!-- #  -->
+<!-- # plots <- plot_bar_case_study(overby_samples) -->
+<!-- # plots <- plot_bar_case_study(sjobo_samples) -->
 
 
 
